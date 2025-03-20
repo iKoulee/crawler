@@ -1,0 +1,11 @@
+portals:
+  - name: "karriere_at"
+    url: "https://www.karriere.at/"
+  - name: "stepstone_at"
+    url: "https://www.stepstone.at/"
+  - name: "stepstone_de"
+    url: "https://www.stepstone.de/"
+  - name: "indeed_at"
+    url: "https://at.indeed.com/"
+  - name: "indeed_de"
+    url: "https://de.indeed.com/"

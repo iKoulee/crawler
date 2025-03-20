@@ -1,0 +1,22 @@
+User-agent: BLEXBot
+Disallow: /
+
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: *
+Disallow:
+
+Sitemap: https://www.karriere.at/sitemaps-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-arbeitgebersuche-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-berufe-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-brutto-netto-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-firmen-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-firmen-standorte-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-firmen-bs-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-firmen-bs-work-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-firmen-bs-jobs-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-gehalt-https.xml
+Sitemap: https://www.karriere.at/static/sitemaps/sitemap-jobs-https.xml
+Sitemap: https://www.karriere.at/hr/sitemaps-1-sitemap.xml
+Sitemap: https://www.karriere.at/sitemaps-2-sitemap.xml
