@@ -4,7 +4,7 @@ import os
 
 from harvester import (
     IndeedHarvester,
-    KarriereAtHarvester,
+    KarriereHarvester,
     MonsterHarvester,
     StepStoneHarvester,
 )
@@ -14,7 +14,7 @@ class HarvesterFactory:
     @staticmethod
     def create_harvester(config):
         if "karriere.at" in config["url"]:
-            return KarriereAtHarvester(config)
+            return KarriereHarvester(config)
         elif "monster.de" in config["url"]:
             return MonsterHarvester(config)
         elif "stepstone.at" in config["url"]:
