@@ -1,17 +1,9 @@
+from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
 
+@dataclass(init=True, repr=True, frozen=True)
 class Advertisement:
-    source = None
-    soup = None
-
-    def __init__(self, source):
-        self.source = source
-
-    def parse(self):
-        self.soup = BeautifulSoup(self.source, features="html.parser")
-
-    def get_advertiser(self):
-        print(self.soup.find("ul"))
-        print(self.soup.find(["ul", "li"]))
-        return self.soup.find("li", attrs={"data-at": "metadata-company-name"})
+    status: int = None
+    link: str = None
+    source: str = None
