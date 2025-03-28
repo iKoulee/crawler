@@ -1,11 +1,53 @@
 portals:
   - name: "karriere_at"
     url: "https://www.karriere.at/"
+    requests_per_minute: 30
   - name: "stepstone_at"
     url: "https://www.stepstone.at/"
+    requests_per_minute: 30
   - name: "stepstone_de"
     url: "https://www.stepstone.de/"
-  - name: "indeed_at"
-    url: "https://at.indeed.com/"
-  - name: "indeed_de"
-    url: "https://de.indeed.com/"
+    requests_per_minute: 30
+  # - name: "indeed_at"
+  #   url: "https://at.indeed.com/"
+  # - name: "indeed_de"
+  #   url: "https://de.indeed.com/"
+keywords:
+  # We are using Python regular expressions to search for the keywords
+  # https://docs.python.org/3/library/re.html
+  - title: "Controller"
+    search: \w*controll\w*
+    case_sensitive: false
+  - title: "Analyst"
+    search: \w*analyst\w*
+    case_sensitive: false
+  - title: "Manager / Management"
+    search: \w*manag\w*
+    case_sensitive: false
+  - title: "Projektentwicklung / Projektentwickler"
+    search: \w*projektentwickl\w*
+    case_sensitive: false
+  - title: "Project development / Project developer"
+    search: \bproject develop\w*
+    case_sensitive: false
+  - title: "Business developer / development"
+    search: \bbusiness develop\w*
+    case_sensitive: false
+  - title: "Recruiter / Recruiting"
+    search: \brecruit\w*
+    case_sensitive: false
+  - title: "HR"
+    search: \bHR\w*
+    case_sensitive: true
+  - title: "Human Resources"
+    search: \bhuman resourc\w*
+    case_sensitive: false
+  - title: "People development"
+    search: \bpeople develop\w*
+    case_sensitive: false
+  - title: "Personalentwicklung / Personalentwickler"
+    search: \bpersonalentwickl\w*
+    case_sensitive: false
+  - title: "Berater / Beratung"
+    search: \bberat\w*
+    case_sensitive: false
