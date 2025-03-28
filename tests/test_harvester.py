@@ -1,3 +1,5 @@
+import logging
+import sqlite3
 import unittest
 from unittest.mock import call, patch
 from time import time, sleep
@@ -12,10 +14,14 @@ sys.path.insert(
 from harvester import (
     Harvester,
     IndeedHarvester,
-    KarriereAtHarvester,
+    KarriereHarvester,
     MonsterHarvester,
     StepStoneHarvester,
 )
+
+KEYWORDS = [r"\w*manag\w*", r"\w*analyst\w*"]
+
+logger = logging.getLogger(__name__)
 
 
 def mocked_request_get(*args, **kwargs):
@@ -45,6 +51,17 @@ def mocked_request_get(*args, **kwargs):
         def read(self):
             return self.file.read()
 
+    if re.search(r"example.com/robots.txt$", args[0]):
+        return MockResponse(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "test_data",
+                    "example_robots.txt",
+                )
+            ),
+            200,
+        )
     if re.search(r"/jobs/manager", args[0]):
         return MockResponse(
             os.path.abspath(
@@ -78,6 +95,42 @@ def mocked_request_get(*args, **kwargs):
             ),
             200,
         )
+    if re.search(r"stepstone.at/sitemap.xml", args[0]):
+        return MockResponse(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "test_data",
+                    "stepstone_sitemap.xml",
+                ),
+            ),
+            200,
+        )
+    if re.search(r"stepstone.at/.*/sitemaps/.*/listings-[0-9]+.xml", args[0]):
+        return MockResponse(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "test_data",
+                    "stepstone_listings.xml",
+                ),
+            ),
+            200,
+        )
+    if re.search(
+        r"stepstone.at.*/stellenangebote--.*\.html$",
+        args[0],
+    ):
+        return MockResponse(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "test_data",
+                    "stepstone_jobs_OTR_Manager.txt.iconv_cleaned_utf8",
+                )
+            ),
+            200,
+        )
     if re.search(r"karriere.at/robots.txt$", args[0]):
         return MockResponse(
             os.path.abspath(
@@ -85,6 +138,17 @@ def mocked_request_get(*args, **kwargs):
                     os.path.dirname(os.path.dirname(__file__)),
                     "test_data",
                     "karriere_robots.txt",
+                ),
+            ),
+            200,
+        )
+    if re.search(r"karriere.at/static/sitemaps", args[0]):
+        return MockResponse(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "test_data",
+                    "karriere_sitemap_jobs.xml",
                 ),
             ),
             200,
@@ -108,20 +172,6 @@ def mocked_request_get(*args, **kwargs):
                     "test_data",
                     "karriere_robots.txt",
                 ),
-            ),
-            200,
-        )
-    if re.search(
-        r"/stellenangebote--.*\.html$",
-        args[0],
-    ):
-        return MockResponse(
-            os.path.abspath(
-                os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)),
-                    "test_data",
-                    "stepstone_jobs_OTR_Manager.txt.iconv_cleaned_utf8",
-                )
             ),
             200,
         )
@@ -152,13 +202,13 @@ class TestHarvester(unittest.TestCase):
         harvester = Harvester(config)
         harvester._last_request = 0
 
-        mock_time.return_value = 10
+        mock_time.return_value = 5
 
         response = harvester._get("http://example.com")
 
         self.assertEqual(response.status_code, 404)
         mock_sleep.assert_called_once()
-        self.assertEqual(harvester._last_request, 10)
+        self.assertEqual(harvester._last_request, 5)
         mock_requests_get.assert_has_calls(
             [
                 call(
@@ -222,425 +272,365 @@ class TestHarvester(unittest.TestCase):
 
 class TestStepstoneHarvester(unittest.TestCase):
 
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
     @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_search_keyword(self, mock_requests_get):
-        config = {"url": "https://www.stepstone.at", "requests_per_minute": 30}
+    def test_get_next_link(self, mock_requests_get):
+        config = {"url": "https://www.stepstone.at", "requests_per_minute": 6000}
         harvester = StepStoneHarvester(config)
         harvester._headers = {"User-Agent": "Mozilla/5.0"}
 
-        response = harvester.search_keyword("manager")
+        links = []
+        for link in harvester.get_next_link():
+            self.assertIsNotNone(link)
+            links.append(link)
 
-        self.assertIsNotNone(response.text)
+        self.assertEqual(len(links), 11017)
         mock_requests_get.assert_has_calls(
             [
                 call(
                     "https://www.stepstone.at/robots.txt",
                     headers={"User-Agent": "Mozilla/5.0"},
                 ),
-                call("https://www.stepstone.at", headers={"User-Agent": "Mozilla/5.0"}),
                 call(
-                    "https://www.stepstone.at/jobs/manager?q=manager",
+                    "https://www.stepstone.at/sitemap.xml",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ),
+                call(
+                    "https://www.stepstone.at/5/sitemaps/at/de/listings-1.xml",
                     headers={"User-Agent": "Mozilla/5.0"},
                     cookies={"session": "12345"},
                 ),
             ]
         )
 
+    @patch("harvester.StepStoneHarvester.get_next_link")
     @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_harwest(self, mock_requests_get):
-        config = {"url": "https://www.stepstone.at", "requests_per_minute": 60}
-        harvester = StepStoneHarvester(config)
-        harvester._headers = {"User-Agent": "Mozilla/5.0"}
-
-        start_time = time()
-        harvester.harvest()
-        finish_time = time()
-
-        self.assertAlmostEqual(
-            finish_time - start_time,
-            30.0,
-            delta=3.0,
-            msg="Time difference should be around 30 seconds",
+    def test_harwest(self, mock_requests_get, mock_get_next_link):
+        mock_get_next_link.return_value = iter(
+            [
+                "https://www.stepstone.at/stellenangebote--FruehstueckskellnerIn-m-w-d-Bad-Ischl-Alpin-Family-GmbH--888366-inline.html",
+                "https://www.stepstone.at/stellenangebote--Berater-fuer-digitale-Zeitmanagementsysteme-m-w-d-Full-Time-Kufstein-Oesterreich-SELSYS-GmbH--895653-inline.html",
+                "https://www.stepstone.at/stellenangebote--Elektrischer-Instandhaltungstechniker-Oberpullendorf-ISG-Personalmanagement-GmbH--892240-inline.html",
+            ]
         )
+        config = {"url": "https://www.stepstone.at", "requests_per_minute": 6000}
+        for keyword in KEYWORDS:
+            Harvester.insert_keyword(self.connection, keyword)
+        harvester = StepStoneHarvester(config)
+        harvester._headers = {"User-Agent": Harvester.AGENT}
 
-        # self.assertIsNotNone(response.text)
-        # mock_sleep.assert_called_once()
+        harvester.harvest(self.connection)
+
         mock_requests_get.assert_has_calls(
             [
                 call(
                     "https://www.stepstone.at/robots.txt",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": "Crawler"},
                 ),
-                call("https://www.stepstone.at", headers={"User-Agent": "Mozilla/5.0"}),
+                call("https://www.stepstone.at", headers={"User-Agent": "Crawler"}),
                 call(
-                    "https://www.stepstone.at/jobs/manager?q=manager",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    "https://www.stepstone.at/stellenangebote--FruehstueckskellnerIn-m-w-d-Bad-Ischl-Alpin-Family-GmbH--888366-inline.html",
+                    headers={"User-Agent": "Crawler"},
                     cookies={"session": "12345"},
                 ),
                 call(
-                    "https://www.stepstone.at/stellenangebote--OTR-Manager-Wien-Amazon-Europe-Core--876597-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    "https://www.stepstone.at/stellenangebote--Berater-fuer-digitale-Zeitmanagementsysteme-m-w-d-Full-Time-Kufstein-Oesterreich-SELSYS-GmbH--895653-inline.html",
+                    headers={"User-Agent": "Crawler"},
                     cookies={"session": "12345"},
                 ),
                 call(
-                    "https://www.stepstone.at/stellenangebote--ISMS-Manager-in-m-w-x-Wien-Linz-Stuttgart-Koeln-STRABAG-BRVZ-GMBH--887526-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Fuhrpark-Mangerin-Innsbruck-Wuerth-Hochenburger-GmbH--886402-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--ManagerIN-Indoor-Freizeitpark-4-Tage-Woche-Wien-Monki-Park-e-U--878410-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--HR-Management-w-m-d-Wels-ISG-Personalmanagement-GmbH--881175-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Senior-Solution-Advisor-for-MES-or-PLM-f-m-d-Supply-Chain-Management-Wien-SAP-AG--881360-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Regulatory-Management-m-w-d-Bezirk-Voecklabruck-Adhara-GmbH--876983-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Produktmanager-m-w-d-Ladeinfrastruktur-und-Energiespeicher-Kufstein-VAHLE-AUTOMATION-GmbH--885180-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--IT-Manager-Geschaeftsprozess-Manager-m-w-d-Liezen-WLL-Personalservice-GmbH--883801-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Produktmanager-Elektrotechnik-m-w-x-Linz-epunkt-GmbH--880919-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--HR-Manager-m-w-d-Laakirchen-Iventa-The-Human-Management-Group--881192-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Area-Sales-Manager-Osteuropa-m-w-d-Wels-AVADOM-Personalmanagement--881149-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Site-Manager-Bauleiter-Elektrotechnik-w-m-x-Linz-epunkt-GmbH--829364-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Risk-Manager-m-w-d-Rankweil-Hirschmann-Automotive-GmbH--884823-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Manager-Sales-Marketing-Pamhagen-ISG-Personalmanagement-GmbH--880804-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Sales-Manager-Vienna-safeREACH-GmbH--852860-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Junior-Finance-Manager-m-w-d-Zentralraum-Oberoesterreich-Schulmeister-Management-Consulting--876625-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Leiter-Securities-Settlement-m-w-d-Bregenz-Hypo-Vorarlberg-Bank-AG--881184-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Marktmanager-in-Stellvertretung-Leoben-BILLA-AG--884539-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Manager-m-w-d-im-Financial-Accounting-Internal-Control-Lannach-Trenkwalder-Personaldienste-GmbH--884591-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--IT-Security-Manager-all-genders-Wien-Frequentis-AG--884511-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--IT-Manager-m-w-d-4300-St-Valentin-Leading-Brokers-United-Austria-GmbH--886831-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Sales-Manager-m-w-d-fuer-Elektromotoren-Generatoren-24111-Graz-ACTIEF-JOBMADE-GmbH--885183-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Medical-Manager-f-m-d-Gastroenterologie-Hepatologie-Wien-EBLINGER-PARTNER--876770-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.stepstone.at/stellenangebote--Marketing-Manager-m-w-d-Wien-Kardex-Austria-GmbH--881092-inline.html",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    "https://www.stepstone.at/stellenangebote--Elektrischer-Instandhaltungstechniker-Oberpullendorf-ISG-Personalmanagement-GmbH--892240-inline.html",
+                    headers={"User-Agent": "Crawler"},
                     cookies={"session": "12345"},
                 ),
             ]
         )
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT count(*) FROM advertisements")
+        result = cursor.fetchone()
+        self.assertEqual(result[0], 3)
+        cursor.execute("SELECT * FROM keyword_advertisement")
+        result = cursor.fetchall()
+        self.assertEqual(len(result), 3)
 
 
 class TestKarriereAtHarvester(unittest.TestCase):
 
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
     @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_search_keyword(self, mock_requests_get):
-        config = {"url": "https://www.karriere.at", "requests_per_minute": 30}
-        harvester = KarriereAtHarvester(config)
-        harvester._headers = {"User-Agent": "Mozilla/5.0"}
+    def test_get_next_link(self, mock_requests_get):
+        config = {"url": "https://www.karriere.at", "requests_per_minute": 6000}
+        harvester = KarriereHarvester(config)
+        harvester._headers = {"User-Agent": KarriereHarvester.AGENT}
 
-        response = harvester.search_keyword("manager")
+        links = []
+        for link in harvester.get_next_link():
+            self.assertIsNotNone(link)
+            links.append(link)
 
-        self.assertIsNotNone(response.text)
+        self.assertEqual(len(links), 18549)
         mock_requests_get.assert_has_calls(
             [
                 call(
                     "https://www.karriere.at/robots.txt",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": "Crawler"},
                 ),
-                call("https://www.karriere.at", headers={"User-Agent": "Mozilla/5.0"}),
                 call(
-                    "https://www.karriere.at/jobs?keywords=manager",
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    "https://www.karriere.at/static/sitemaps/sitemap-jobs-https.xml",
+                    headers={"User-Agent": "Crawler"},
+                ),
+            ]
+        )
+
+    @patch("harvester.KarriereHarvester.get_next_link")
+    @patch("harvester.requests.get", side_effect=mocked_request_get)
+    def test_harwest(self, mock_requests_get, mock_get_next_link):
+        mock_get_next_link.return_value = iter(
+            [
+                "https://www.karriere.at/jobs/7473235",
+                "https://www.karriere.at/jobs/7482247",
+                "https://www.karriere.at/jobs/7440898",
+            ]
+        )
+        config = {"url": "https://www.karriere.at", "requests_per_minute": 6000}
+        for keyword in KEYWORDS:
+            Harvester.insert_keyword(self.connection, keyword)
+        harvester = KarriereHarvester(config)
+        harvester._headers = {"User-Agent": KarriereHarvester.AGENT}
+
+        harvester.harvest(self.connection)
+
+        mock_requests_get.assert_has_calls(
+            [
+                call(
+                    "https://www.karriere.at/robots.txt",
+                    headers={"User-Agent": "Crawler"},
+                ),
+                call("https://www.karriere.at", headers={"User-Agent": "Crawler"}),
+                call(
+                    "https://www.karriere.at/jobs/7473235",
+                    headers={"User-Agent": "Crawler"},
+                    cookies={"session": "12345"},
+                ),
+                call(
+                    "https://www.karriere.at/jobs/7482247",
+                    headers={"User-Agent": "Crawler"},
+                    cookies={"session": "12345"},
+                ),
+                call(
+                    "https://www.karriere.at/jobs/7440898",
+                    headers={"User-Agent": "Crawler"},
                     cookies={"session": "12345"},
                 ),
             ]
         )
 
-    @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_harwest(self, mock_requests_get):
-        config = {"url": "https://www.karriere.at", "requests_per_minute": 60}
-        harvester = KarriereAtHarvester(config)
-        harvester._headers = {"User-Agent": "Mozilla/5.0"}
-
-        start_time = time()
-        harvester.harvest()
-        finish_time = time()
-
-        self.assertAlmostEqual(
-            finish_time - start_time,
-            20.0,
-            delta=3.0,
-            msg="Time difference should be around 30 seconds",
-        )
-        mock_requests_get.assert_has_calls(
-            [
-                call(
-                    "https://www.karriere.at/robots.txt",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                ),
-                call("https://www.karriere.at", headers={"User-Agent": "Mozilla/5.0"}),
-                call(
-                    "https://www.karriere.at/jobs?keywords=manager",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7473235",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7482247",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7440898",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7467400",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7477366",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7466941",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7461445",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7441276",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7418758",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7291924",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7467235",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7459498",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7457008",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7478263",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7453957",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7428325",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7227538",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-                call(
-                    "https://www.karriere.athttps://www.karriere.at/jobs/7478590",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-            ]
-        )
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT count(*) FROM advertisements")
+        result = cursor.fetchone()
+        self.assertEqual(result[0], 3)
+        cursor.execute("SELECT * FROM keyword_advertisement")
+        result = cursor.fetchall()
+        self.assertEqual(len(result), 3)
 
 
 class TestMonsterHarvester(unittest.TestCase):
 
-    @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_search_keyword(self, mock_requests_get):
-        config = {"url": "https://www.monster.de", "requests_per_minute": 30}
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
+    def test_get_next_link(self):
+        config = {"url": "https://www.monster.de", "requests_per_minute": 60}
         harvester = MonsterHarvester(config)
-        harvester._headers = {"User-Agent": "Mozilla/5.0"}
 
-        response = harvester.search_keyword("manager")
+        with self.assertRaises(NotImplementedError) as context:
+            list(harvester.get_next_link())
 
-        self.assertIsNotNone(response.text)
-        mock_requests_get.assert_has_calls(
-            [
-                call(
-                    "https://www.monster.at/robots.txt",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                ),
-                call("https://www.monster.at", headers={"User-Agent": "Mozilla/5.0"}),
-                call(
-                    "https://www.monster.at/jobs?keywords=manager",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-            ]
+        self.assertEqual(
+            str(context.exception),
+            "MonsterHarvester.get_next_link() is not implemented yet.",
         )
 
     @patch("harvester.requests.get", side_effect=mocked_request_get)
     def test_harwest(self, mock_requests_get):
         config = {"url": "https://www.monster.de", "requests_per_minute": 60}
+        for keyword in KEYWORDS:
+            Harvester.insert_keyword(self.connection, keyword)
         harvester = MonsterHarvester(config)
-        harvester._headers = {"User-Agent": "Mozilla/5.0"}
+        harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
-        start_time = time()
-        harvester.harvest()
-        finish_time = time()
+        with self.assertRaises(NotImplementedError) as context:
+            harvester.harvest(self.connection)
 
-        self.assertAlmostEqual(
-            finish_time - start_time,
-            20.0,
-            delta=3.0,
-            msg="Time difference should be around 30 seconds",
+        self.assertEqual(
+            str(context.exception),
+            "MonsterHarvester.get_next_link() is not implemented yet.",
         )
+
+        self.assertFalse(mock_requests_get.called)
+
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT count(*) FROM advertisements")
+        result = cursor.fetchone()
+        self.assertEqual(result[0], 0)
+        cursor.execute("SELECT * FROM keyword_advertisement")
+        result = cursor.fetchall()
+        self.assertEqual(len(result), 0)
 
 
 class TestIneedHarvester(unittest.TestCase):
 
-    @patch("harvester.requests.get", side_effect=mocked_request_get)
-    def test_search_keyword(self, mock_requests_get):
-        config = {"url": "https://at.indeed.com", "requests_per_minute": 30}
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
+    def test_get_next_link(self):
+        config = {"url": "https://www.monster.de", "requests_per_minute": 60}
         harvester = IndeedHarvester(config)
-        harvester._headers = {"User-Agent": "Crawler"}
 
-        response = harvester.search_keyword("manager")
+        with self.assertRaises(NotImplementedError) as context:
+            list(harvester.get_next_link())
 
-        self.assertIsNotNone(response.text)
-        mock_requests_get.assert_has_calls(
-            [
-                call(
-                    "https://www.indeed.com/robots.txt",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                ),
-                call("https://www.indeed.com", headers={"User-Agent": "Mozilla/5.0"}),
-                call(
-                    "https://www.indeed.com/jobs?keywords=manager",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    cookies={"session": "12345"},
-                ),
-            ]
+        self.assertEqual(
+            str(context.exception),
+            "IndeedHarvester.get_next_link() is not implemented yet.",
         )
 
     @patch("harvester.requests.get", side_effect=mocked_request_get)
     def test_harwest(self, mock_requests_get):
-        config = {"url": "https://at.indeed.com", "requests_per_minute": 60}
+        config = {"url": "https://www.monster.de", "requests_per_minute": 60}
+        for keyword in KEYWORDS:
+            Harvester.insert_keyword(self.connection, keyword)
         harvester = IndeedHarvester(config)
-        harvester._headers = {"User-Agent": "Crawler"}
+        harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
-        start_time = time()
-        harvester.harvest()
-        finish_time = time()
+        with self.assertRaises(NotImplementedError) as context:
+            harvester.harvest(self.connection)
 
-        self.assertAlmostEqual(
-            finish_time - start_time,
-            20.0,
-            delta=3.0,
-            msg="Time difference should be around 30 seconds",
+        self.assertEqual(
+            str(context.exception),
+            "IndeedHarvester.get_next_link() is not implemented yet.",
         )
+
+        self.assertFalse(mock_requests_get.called)
+
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT count(*) FROM advertisements")
+        result = cursor.fetchone()
+        self.assertEqual(result[0], 0)
+        cursor.execute("SELECT * FROM keyword_advertisement")
+        result = cursor.fetchall()
+        self.assertEqual(len(result), 0)
+
+
+class TestInsertKeyword(unittest.TestCase):
+
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
+    def test_insert_keyword_new(self):
+        # Test inserting a new keyword
+        keyword = "manager"
+        logger.info("Inserting keyword:", keyword)
+        Harvester.insert_keyword(self.connection, keyword)
+
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT keyword FROM keywords WHERE keyword = ?", (keyword,))
+        result = cursor.fetchone()
+
+        logger.info("Retrieved regex:", result)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], keyword)
+
+    def test_insert_keyword_duplicate(self):
+        # Test inserting a duplicate keyword
+        keyword = "manager"
+        Harvester.insert_keyword(self.connection, keyword)
+        Harvester.insert_keyword(self.connection, keyword)
+
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM keywords WHERE keyword = ?", (keyword,))
+        result = cursor.fetchone()
+
+        self.assertEqual(result[0], 1)  # Ensure no duplicate entries
+
+
+class TestFetchKeywords(unittest.TestCase):
+
+    def setUp(self):
+        # Set up an in-memory SQLite database for testing
+        self.connection = sqlite3.connect(":memory:")
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self):
+        # Close the database connection after each test
+        self.connection.close()
+
+    def test_fetch_keywords_empty(self):
+        # Test fetch_keywords when no keywords are present in the database
+        harvester = Harvester({"url": "http://example.com"})
+        keywords = harvester.fetch_keywords(self.connection)
+
+        self.assertEqual(keywords, {})  # Should return an empty dictionary
+
+    def test_fetch_keywords_single(self):
+        # Test fetch_keywords with a single keyword in the database
+        Harvester.insert_keyword(self.connection, r"\w*manager\w*")
+        harvester = Harvester({"url": "http://example.com"})
+        keywords = harvester.fetch_keywords(self.connection)
+
+        self.assertEqual(len(keywords), 1)
+        self.assertEqual(keywords[1].pattern, r"\w*manager\w*")
+
+    def test_fetch_keywords_multiple(self):
+        # Test fetch_keywords with multiple keywords in the database
+        Harvester.insert_keyword(self.connection, r"\w*manager\w*")
+        Harvester.insert_keyword(self.connection, r"\w*analyst\w*")
+        harvester = Harvester({"url": "http://example.com"})
+        keywords = harvester.fetch_keywords(self.connection)
+
+        self.assertEqual(len(keywords), 2)
+        self.assertTrue(1 in keywords)
+        self.assertTrue(2 in keywords)
+        self.assertEqual(keywords[1].pattern, r"\w*manager\w*")
+        self.assertEqual(keywords[2].pattern, r"\w*analyst\w*")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG, format="%(name)s %(levelname)s %(message)s"
+    )
     unittest.main()

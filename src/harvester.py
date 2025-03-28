@@ -6,6 +6,7 @@ from time import sleep, time
 from protego import Protego
 
 from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 
 from advert import Advertisement
 
@@ -27,13 +28,104 @@ class Harvester:
     _robot_parser = None
 
     def __init__(self, config):
-        self.config = config
         self.url = config["url"]
         self.requests_per_minute = config.get("requests_per_minute", 1)
 
-    def harvest(self):
-        # code to harvest data
-        pass
+    @staticmethod
+    def create_schema(connection):
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS advertisements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                title TEXT,
+                description TEXT,
+                company TEXT,
+                location TEXT,
+                harvest_date DATE,
+                url TEXT NOT NULL UNIQUE,
+                html_body TEXT NOT NULL,
+                html_status INTEGER NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                keyword TEXT NOT NULL UNIQUE
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS keyword_advertisement (
+                keyword_id INTEGER,
+                advertisement_id INTEGER,
+                FOREIGN KEY (keyword_id) REFERENCES keywords(id),
+                FOREIGN KEY (advertisement_id) REFERENCES advertisements(id)
+                PRIMARY KEY (keyword_id, advertisement_id)
+            )
+            """
+        )
+        connection.commit()
+
+    @staticmethod
+    def insert_keyword(connection, keyword):
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (keyword,)
+        )
+        connection.commit()
+
+    def fetch_keywords(self, connection):
+        cursor = connection.cursor()
+        cursor.execute("SELECT id, keyword FROM keywords")
+        result = cursor.fetchall()
+        if result:
+            return dict([(row[0], re.compile(row[1])) for row in result])
+        return {}
+
+    @abstractmethod
+    def get_next_link(self):
+        raise NotImplementedError(
+            f"{self.__class__.__name__}.get_next_link() is not implemented yet."
+        )
+
+    def get_next_advert(self):
+        """
+        Retrieves and yields the next advertisement from the sitemap.
+        """
+        for link in self.get_next_link():
+            response = self._get(link, headers=self._headers, cookies=self.cookies)
+            response.raise_for_status()
+            response.encoding = response.apparent_encoding
+            yield Advertisement(
+                status=response.status_code,
+                link=link,
+                source=response.text,
+            )
+
+    def harvest(self, connection):
+        self.create_schema(connection)
+        regexes = self.fetch_keywords(connection)
+        cursor = connection.cursor()
+        for advert in self.get_next_advert():
+            cursor.execute(
+                "INSERT INTO advertisements (html_body, html_status, url) VALUES (?, ?, ?)",
+                (
+                    advert.source,
+                    advert.status,
+                    advert.link,
+                ),
+            )
+            advert_id = cursor.lastrowid
+            for id, regex in regexes.items():
+                if regex.search(advert.source):
+                    cursor.execute(
+                        "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+                        (id, advert_id),
+                    )
 
     def _get_robot_parser(self, refresh=False):
         if not self._robot_parser or refresh:
@@ -48,8 +140,6 @@ class Harvester:
             response = self._get(self.url, headers=self._headers)
             self._cookies = response.cookies
             self._referer = response.url
-        print("Cookies", self._cookies)
-        print("Referer", self._referer)
         return self._cookies
 
     @cached_property
@@ -60,140 +150,70 @@ class Harvester:
     def can_fetch(self, uri):
         return self._get_robot_parser().can_fetch(uri, self.AGENT)
 
-    @abstractmethod
-    def search_keyword(self, keyword):
-        # code to search keyword
-        pass
-
     def _get(self, *args, **kwargs):
         now = time()
         if self._last_request + self.crawl_delay > now:
             sleep(self.crawl_delay)
         self._last_request = time()
-        return requests.get(*args, **kwargs)
+        response = requests.get(*args, **kwargs)
+        if response.cookies:
+            self._cookies = response.cookies
+        return response
 
 
 class StepStoneHarvester(Harvester):
 
-    def __init__(self, config):
-        super().__init__(config)
-
-    def harvest(self):
-        keywords = ["manager"]
-        for keyword in keywords:
-            search_result = self.search_keyword(keyword)
-            for article in search_result.find_all(
-                "article", attrs={"data-testid": "job-item"}
-            ):
-                link = article.find("a", attrs={"data-testid": "job-item-title"})
-                if not link:
-                    continue
-                response = self._get(
-                    self.url + link["href"], headers=self._headers, cookies=self.cookies
-                )
-                response.raise_for_status()
-                ad = Advertisement(response.text)
-                ad.parse()
-
-    def search_keyword(self, keyword) -> BeautifulSoup:
-        uri = f"/jobs/{keyword}?q={keyword}"
-        if not self.can_fetch(uri):
-            raise Exception(f"URI {uri} is not allowed by robots.txt")
-        response = self._get(
-            self.url + uri, headers=self._headers, cookies=self.cookies
-        )
+    def get_next_link(self):
+        """
+        Retrieves and yields links from the sitemap and nested sitemaps.
+        """
+        # Fetch the main sitemap
+        response = self._get(f"{self.url}/sitemap.xml", headers=self._headers)
         response.raise_for_status()
-        return BeautifulSoup(response.text, features="html.parser")
+        main_sitemap = ET.fromstring(response.text)
 
-
-class KarriereAtHarvester(Harvester):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def harvest(self):
-        keywords = ["manager"]
-        for keyword in keywords:
-            search_result = self.search_keyword(keyword)
-            for link in search_result.find_all(
-                "a", attrs={"class": "m-jobsListItem__titleLink"}
-            ):
-                response = self._get(
-                    self.url + link["href"], headers=self._headers, cookies=self.cookies
+        # Iterate through all <loc> elements in the main sitemap
+        for link in main_sitemap.findall(
+            ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+        ):
+            if re.match(r".*listings-[0-9]+.*", link.text):
+                # Fetch the nested sitemap
+                nested_sitemap_link = link.text
+                nested_response = self._get(
+                    nested_sitemap_link, headers=self._headers, cookies=self.cookies
                 )
+                nested_response.raise_for_status()
+                nested_response.encoding = nested_response.apparent_encoding
+                nested_sitemap = ET.fromstring(nested_response.text)
+
+                # Yield all <loc> elements from the nested sitemap
+                for nested_link in nested_sitemap.findall(
+                    ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+                ):
+                    yield nested_link.text
+
+
+class KarriereHarvester(Harvester):
+
+    def get_next_link(self):
+        for sitemap_link in self._get_robot_parser().sitemaps:
+            if re.match(r".*sitemap-jobs.*", sitemap_link):
+                response = self._get(sitemap_link, headers=self._headers)
                 response.raise_for_status()
                 response.encoding = response.apparent_encoding
-                ad = Advertisement(response.text)
-
-    def search_keyword(self, keyword) -> BeautifulSoup:
-        uri = f"/jobs?keywords={keyword}"
-        if not self.can_fetch(uri):
-            raise Exception(f"URI {uri} is not allowed by robots.txt")
-        response = self._get(
-            self.url + uri, headers=self._headers, cookies=self.cookies
-        )
-        response.raise_for_status()
-        response.encoding = response.apparent_encoding
-        return BeautifulSoup(response.text, features="html.parser")
+                sitemap = ET.fromstring(response.text)
+                for link in sitemap.findall(
+                    ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+                ):
+                    print(link.text)
+                    yield link.text
 
 
 class MonsterHarvester(Harvester):
-    def __init__(self, config):
-        super().__init__(config)
 
-    def harvest(self):
-        keywords = ["manager"]
-        for keyword in keywords:
-            search_result = self.search_keyword(keyword)
-            for link in search_result.find_all(
-                "a", attrs={"class": "m-jobsListItem__titleLink"}
-            ):
-                response = self._get(
-                    self.url + link["href"], headers=self._headers, cookies=self.cookies
-                )
-                response.raise_for_status()
-                response.encoding = response.apparent_encoding
-                ad = Advertisement(response.text)
-
-    def search_keyword(self, keyword) -> BeautifulSoup:
-        uri = f"/jobs/suche?q={keyword}&page=1"
-        if not self.can_fetch(uri):
-            raise Exception(f"URI {uri} is not allowed by robots.txt")
-        print("Getting", self.url + uri)
-        response = self._get(
-            self.url + uri, headers=self._headers, cookies=self.cookies
-        )
-        response.raise_for_status()
-        print("Status", response.status_code)
-        response.encoding = response.apparent_encoding
-        with open("monster.html", "w") as f:
-            f.write(response.text)
-        return BeautifulSoup(response.text, features="html.parser")
+    pass
 
 
 class IndeedHarvester(Harvester):
-    _headers = {
-        "User-Agent": "Googlebot",
-        # "User-Agent": AGENT,
-        "Accept-Encoding": "br",
-        "Connection": "keep-alive",
-        "accept": "accept: text/html,application/xhtml+xml,application/xml",
-    }
 
-    def search_keyword(self, keyword):
-        uri = f"/jobs?q={keyword}"
-        if not self.can_fetch(uri):
-            raise Exception(f"URI {uri} is not allowed by robots.txt")
-        print("Getting", self.url + uri)
-        response = self._get(
-            self.url + uri, headers=self._headers, cookies=self.cookies
-        )
-        print("Status", response.status_code)
-        # print(response.text)
-        with open("anticrawler_data", "bw") as f:
-            f.write(response.content)
-        response.raise_for_status()
-        print("Status", response.status_code)
-        response.encoding = response.apparent_encoding
-        with open("monster.html", "w") as f:
-            f.write(response.text)
-        return BeautifulSoup(response.text, features="html.parser")
+    pass
