@@ -1,13 +1,16 @@
 portals:
   - name: "karriere_at"
     url: "https://www.karriere.at/"
+    engine: KarriereHarvester
     requests_per_minute: 30
   - name: "stepstone_at"
     url: "https://www.stepstone.at/"
     requests_per_minute: 30
+    engine: StepStoneHarvester
   - name: "stepstone_de"
     url: "https://www.stepstone.de/"
     requests_per_minute: 30
+    engine: StepStoneHarvester
   # - name: "indeed_at"
   #   url: "https://at.indeed.com/"
   # - name: "indeed_de"
@@ -16,38 +19,104 @@ keywords:
   # We are using Python regular expressions to search for the keywords
   # https://docs.python.org/3/library/re.html
   - title: "Controller"
-    search: \w*controll\w*
+    search: controll
     case_sensitive: false
   - title: "Analyst"
-    search: \w*analyst\w*
+    search: analyst
     case_sensitive: false
   - title: "Manager / Management"
-    search: \w*manag\w*
+    search: manag
     case_sensitive: false
   - title: "Projektentwicklung / Projektentwickler"
-    search: \w*projektentwickl\w*
+    search: projektentwickl
     case_sensitive: false
   - title: "Project development / Project developer"
-    search: \bproject develop\w*
+    search: \bproject\s+develop
     case_sensitive: false
   - title: "Business developer / development"
-    search: \bbusiness develop\w*
+    search: \bbusiness develop
     case_sensitive: false
   - title: "Recruiter / Recruiting"
-    search: \brecruit\w*
+    search: \brecruit
     case_sensitive: false
   - title: "HR"
-    search: \bHR\w*
+    search: \bHR
     case_sensitive: true
   - title: "Human Resources"
-    search: \bhuman resourc\w*
+    search: \bhuman\s+resourc
     case_sensitive: false
   - title: "People development"
-    search: \bpeople develop\w*
+    search: \bpeople\s+develop
     case_sensitive: false
   - title: "Personalentwicklung / Personalentwickler"
-    search: \bpersonalentwickl\w*
+    search: \bpersonalentwickl
     case_sensitive: false
   - title: "Berater / Beratung"
-    search: \bberat\w*
+    search: \bberat
+    case_sensitive: false
+  - title: "Consultant / Consulting"
+    search: \bconsult
+    case_sensitive: false
+  - title: Associate
+    search: \bassociate\b
+    case_sensitive: false
+  - title: "Markforscher / Marktforschung"
+    search: \bmarktforsch
+    case_sensitive: false
+  - title: "Market research/er"
+    search: \bmarket\s+research
+    case_sensitive: false
+  - title: "Marketing"
+    search: .*marketing
+    case_sensitive: false
+  - title: "Vertrieb"
+    search: vertrieb
+    case_sensitive: false
+  - title: "Sales"
+    search: \bsales\b
+    case_sensitive: false
+  - title: "Finance / financial specialist / Finanz"
+    search: \bfinan
+    case_sensitive: false
+  - title: "Communication"
+    search: \bcommunication
+    case_sensitive: false
+  - title: "Kommunikation"
+    search: kommunikation
+    case_sensitive: false
+  - title: "PR"
+    search: \bPR
+    case_sensitive: true
+  - title: "Public relations"
+    search: \bpublic\s+relations\b
+    case_sensitive: false
+  - title: "Leader"
+    search: \bleader\b
+    case_sensitive: false
+  - title: "Team Lead"
+    search: \bteam\s+lead\b
+    case_sensitive: false
+  - title: "Leitung"
+    search: leitung\b
+    case_sensitive: false
+  - title: "Leiter"
+    search: leiter
+    case_sensitive: false
+  - title: Tax advisor
+    search: \btax\s+advi
+    case_sensitive: false
+  - title: "Steuerberater*in"
+    search: \bsteuerberat
+    case_sensitive: false
+  - title: "Auditor"
+    search: \baudit
+    case_sensitive: false
+  - title: "Wirtschaftsprüfer*in"
+    search: \bwirtschaftsprüf
+    case_sensitive: false
+  - title: "Accountant"
+    search: \baccount
+    case_sensitive: false
+  - title: "Buchhalter*in"
+    search: buchhalt
     case_sensitive: false
