@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import tempfile
 import unittest
 from unittest.mock import call, patch
 from time import time, sleep
@@ -19,7 +20,11 @@ from harvester import (
     StepStoneHarvester,
 )
 
-KEYWORDS = [r"\w*manag\w*", r"\w*analyst\w*"]
+KEYWORDS = [
+    {"title": "Manager", "search": r"manager", "case_sensitive": False},
+    {"title": "Controller", "search": r"controll", "case_sensitive": False},
+    {"title": "Analyst", "search": r"analyst", "case_sensitive": False},
+]
 
 logger = logging.getLogger(__name__)
 
@@ -215,10 +220,8 @@ class TestHarvester(unittest.TestCase):
                     "http://example.com/robots.txt",
                     headers={
                         "User-Agent": "Crawler",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Accept-Encoding": "gzip, deflate, br",
                         "Connection": "keep-alive",
-                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9",
                     },
                 ),
                 call("http://example.com"),
@@ -240,20 +243,16 @@ class TestHarvester(unittest.TestCase):
                     "https://www.stepstone.at/robots.txt",
                     headers={
                         "User-Agent": "Crawler",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Accept-Encoding": "gzip, deflate, br",
                         "Connection": "keep-alive",
-                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9",
                     },
                 ),
                 call(
                     "https://www.stepstone.at",
                     headers={
                         "User-Agent": "Crawler",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Accept-Encoding": "gzip, deflate, br",
                         "Connection": "keep-alive",
-                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept": "accept: text/html,application/xhtml+xml,application/xml;q=0.9",
                     },
                 ),
             ]
@@ -273,8 +272,9 @@ class TestHarvester(unittest.TestCase):
 class TestStepstoneHarvester(unittest.TestCase):
 
     def setUp(self):
-        # Set up an in-memory SQLite database for testing
-        self.connection = sqlite3.connect(":memory:")
+        self.temp_db_file = tempfile.mkstemp(suffix=".db")[1]
+        self.connection = sqlite3.connect(self.temp_db_file)
+        # self.connection = sqlite3.connect(":memory:")
         Harvester.create_schema(self.connection)
 
     def tearDown(self):
@@ -327,7 +327,7 @@ class TestStepstoneHarvester(unittest.TestCase):
         harvester = StepStoneHarvester(config)
         harvester._headers = {"User-Agent": Harvester.AGENT}
 
-        harvester.harvest(self.connection)
+        harvester.harvest(self.temp_db_file)
 
         mock_requests_get.assert_has_calls(
             [
@@ -357,16 +357,17 @@ class TestStepstoneHarvester(unittest.TestCase):
         cursor.execute("SELECT count(*) FROM advertisements")
         result = cursor.fetchone()
         self.assertEqual(result[0], 3)
-        cursor.execute("SELECT * FROM keyword_advertisement")
-        result = cursor.fetchall()
-        self.assertEqual(len(result), 3)
+        cursor.execute("SELECT count(*) FROM keyword_advertisement")
+        result = cursor.fetchone()
+        self.assertEqual(result[0], 6)
 
 
 class TestKarriereAtHarvester(unittest.TestCase):
 
     def setUp(self):
-        # Set up an in-memory SQLite database for testing
-        self.connection = sqlite3.connect(":memory:")
+        self.temp_db_file = tempfile.mkstemp(suffix=".db")[1]
+        self.connection = sqlite3.connect(self.temp_db_file)
+        # self.connection = sqlite3.connect(":memory:")
         Harvester.create_schema(self.connection)
 
     def tearDown(self):
@@ -414,7 +415,7 @@ class TestKarriereAtHarvester(unittest.TestCase):
         harvester = KarriereHarvester(config)
         harvester._headers = {"User-Agent": KarriereHarvester.AGENT}
 
-        harvester.harvest(self.connection)
+        harvester.harvest(self.temp_db_file)
 
         mock_requests_get.assert_has_calls(
             [
@@ -453,8 +454,9 @@ class TestKarriereAtHarvester(unittest.TestCase):
 class TestMonsterHarvester(unittest.TestCase):
 
     def setUp(self):
-        # Set up an in-memory SQLite database for testing
-        self.connection = sqlite3.connect(":memory:")
+        self.temp_db_file = tempfile.mkstemp(suffix=".db")[1]
+        self.connection = sqlite3.connect(self.temp_db_file)
+        # self.connection = sqlite3.connect(":memory:")
         Harvester.create_schema(self.connection)
 
     def tearDown(self):
@@ -482,7 +484,7 @@ class TestMonsterHarvester(unittest.TestCase):
         harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
         with self.assertRaises(NotImplementedError) as context:
-            harvester.harvest(self.connection)
+            harvester.harvest(self.temp_db_file)
 
         self.assertEqual(
             str(context.exception),
@@ -504,7 +506,9 @@ class TestIneedHarvester(unittest.TestCase):
 
     def setUp(self):
         # Set up an in-memory SQLite database for testing
-        self.connection = sqlite3.connect(":memory:")
+        self.temp_db_file = tempfile.mkstemp(suffix=".db")[1]
+        self.connection = sqlite3.connect(self.temp_db_file)
+        # self.connection = sqlite3.connect(":memory:")
         Harvester.create_schema(self.connection)
 
     def tearDown(self):
@@ -532,7 +536,7 @@ class TestIneedHarvester(unittest.TestCase):
         harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
         with self.assertRaises(NotImplementedError) as context:
-            harvester.harvest(self.connection)
+            harvester.harvest(self.temp_db_file)
 
         self.assertEqual(
             str(context.exception),
@@ -563,26 +567,27 @@ class TestInsertKeyword(unittest.TestCase):
 
     def test_insert_keyword_new(self):
         # Test inserting a new keyword
-        keyword = "manager"
-        logger.info("Inserting keyword:", keyword)
-        Harvester.insert_keyword(self.connection, keyword)
+        logger.info("Inserting keyword:", KEYWORDS[0])
+        Harvester.insert_keyword(self.connection, KEYWORDS[0])
 
         cursor = self.connection.cursor()
-        cursor.execute("SELECT keyword FROM keywords WHERE keyword = ?", (keyword,))
+        cursor.execute(
+            "SELECT search FROM keywords WHERE title = ?", (KEYWORDS[0]["title"],)
+        )
         result = cursor.fetchone()
 
         logger.info("Retrieved regex:", result)
         self.assertIsNotNone(result)
-        self.assertEqual(result[0], keyword)
+        self.assertEqual(result[0], KEYWORDS[0]["search"])
 
     def test_insert_keyword_duplicate(self):
-        # Test inserting a duplicate keyword
-        keyword = "manager"
-        Harvester.insert_keyword(self.connection, keyword)
-        Harvester.insert_keyword(self.connection, keyword)
+        Harvester.insert_keyword(self.connection, KEYWORDS[0])
+        Harvester.insert_keyword(self.connection, KEYWORDS[0])
 
         cursor = self.connection.cursor()
-        cursor.execute("SELECT COUNT(*) FROM keywords WHERE keyword = ?", (keyword,))
+        cursor.execute(
+            "SELECT COUNT(*) FROM keywords WHERE search = ?", (KEYWORDS[0]["search"],)
+        )
         result = cursor.fetchone()
 
         self.assertEqual(result[0], 1)  # Ensure no duplicate entries
@@ -608,7 +613,10 @@ class TestFetchKeywords(unittest.TestCase):
 
     def test_fetch_keywords_single(self):
         # Test fetch_keywords with a single keyword in the database
-        Harvester.insert_keyword(self.connection, r"\w*manager\w*")
+        Harvester.insert_keyword(
+            self.connection,
+            {"title": "Manager", "search": r"\w*manager\w*", "case_sensitive": False},
+        )
         harvester = Harvester({"url": "http://example.com"})
         keywords = harvester.fetch_keywords(self.connection)
 
@@ -617,16 +625,22 @@ class TestFetchKeywords(unittest.TestCase):
 
     def test_fetch_keywords_multiple(self):
         # Test fetch_keywords with multiple keywords in the database
-        Harvester.insert_keyword(self.connection, r"\w*manager\w*")
-        Harvester.insert_keyword(self.connection, r"\w*analyst\w*")
+        Harvester.insert_keyword(
+            self.connection,
+            {"title": "Manager", "search": r"manager", "case_sensitive": False},
+        )
+        Harvester.insert_keyword(
+            self.connection,
+            {"title": "Controller", "search": r"controll", "case_sensitive": False},
+        )
         harvester = Harvester({"url": "http://example.com"})
         keywords = harvester.fetch_keywords(self.connection)
 
         self.assertEqual(len(keywords), 2)
         self.assertTrue(1 in keywords)
         self.assertTrue(2 in keywords)
-        self.assertEqual(keywords[1].pattern, r"\w*manager\w*")
-        self.assertEqual(keywords[2].pattern, r"\w*analyst\w*")
+        self.assertEqual(keywords[1].pattern, r"manager")
+        self.assertEqual(keywords[2].pattern, r"controll")
 
 
 if __name__ == "__main__":
