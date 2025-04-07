@@ -5,16 +5,12 @@ portals:
     requests_per_minute: 30
   - name: "stepstone_at"
     url: "https://www.stepstone.at/"
-    requests_per_minute: 30
+    requests_per_minute: 5
     engine: StepStoneHarvester
   - name: "stepstone_de"
     url: "https://www.stepstone.de/"
-    requests_per_minute: 30
+    requests_per_minute: 5
     engine: StepStoneHarvester
-  # - name: "indeed_at"
-  #   url: "https://at.indeed.com/"
-  # - name: "indeed_de"
-  #   url: "https://de.indeed.com/"
 keywords:
   # We are using Python regular expressions to search for the keywords
   # https://docs.python.org/3/library/re.html
