@@ -186,6 +186,7 @@ cython_debug/
 *.ear
 *.sar
 *.class
+*.db
 
 # Maven 
 target/
