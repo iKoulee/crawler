@@ -117,6 +117,45 @@ def assembly_command(args: argparse.Namespace, logger: logging.Logger) -> None:
         logger.exception("Unexpected error: %s", e)
 
 
+def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """
+    Execute the export command to export HTML bodies to files with nested directory structure.
+
+    Args:
+        args: Command line arguments
+        logger: Logger instance
+    """
+    try:
+        connection = sqlite3.connect(args.database)
+
+        # Create output directory if it doesn't exist
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+            logger.info("Created output directory: %s", args.output_dir)
+
+        # Export HTML bodies
+        total_exported, category_counts = Harvester.export_html_bodies(
+            connection,
+            args.output_dir,
+            args.config,
+            min_id=args.min_id,
+            max_id=args.max_id,
+        )
+
+        logger.info("Exported %d advertisements", total_exported)
+        for category, count in category_counts.items():
+            logger.info("  Category %s: %d matches", category, count)
+
+        connection.close()
+
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+    except IOError as e:
+        logger.error("File error: %s", e)
+    except Exception as e:
+        logger.exception("Unexpected error: %s", e)
+
+
 def main() -> None:
     """
     Main function that parses command line arguments and dispatches to subcommands.
@@ -189,6 +228,45 @@ def main() -> None:
         help="Maximum advertisement ID to include",
     )
 
+    # Create the parser for the "export" command
+    export_parser = subparsers.add_parser(
+        "export", help="Export advertisement HTML bodies to files with nested structure"
+    )
+    export_parser.add_argument(
+        "-d",
+        "--database",
+        required=False,
+        type=str,
+        default=os.path.join(os.getcwd(), "crawler.db"),
+        help="Path to the database file",
+    )
+    export_parser.add_argument(
+        "-c",
+        "--config",
+        required=True,
+        type=str,
+        help="Path to the filter configuration file",
+    )
+    export_parser.add_argument(
+        "-o",
+        "--output-dir",
+        required=True,
+        type=str,
+        help="Output directory for exported HTML files",
+    )
+    export_parser.add_argument(
+        "--min-id",
+        required=False,
+        type=int,
+        help="Minimum advertisement ID to include",
+    )
+    export_parser.add_argument(
+        "--max-id",
+        required=False,
+        type=int,
+        help="Maximum advertisement ID to include",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -201,8 +279,10 @@ def main() -> None:
         harvest_command(args, logger)
     elif args.command == "assembly":
         assembly_command(args, logger)
+    elif args.command == "export":
+        export_command(args, logger)
     else:
-        logger.error("No command specified. Use 'harvest' or 'assembly'.")
+        logger.error("No command specified. Use 'harvest', 'assembly', or 'export'.")
         parser.print_help()
 
 

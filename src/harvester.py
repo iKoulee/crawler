@@ -10,7 +10,10 @@ from abc import abstractmethod
 from time import sleep, time
 from datetime import datetime
 from protego import Protego
-from typing import Dict, List, Any, Iterator, Optional, Type, Tuple, Set
+from typing import Dict, List, Any, Iterator, Optional, Type, Tuple, Set, Pattern
+import os
+import yaml
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
@@ -545,6 +548,289 @@ class Harvester:
             "CSV string generation completed with %d rows", len(advertisements)
         )
         return output.getvalue()
+
+    @staticmethod
+    def export_html_bodies(
+        connection: sqlite3.Connection,
+        output_dir: str,
+        config_path: str,
+        min_id: Optional[int] = None,
+        max_id: Optional[int] = None,
+    ) -> Tuple[int, Dict[str, int]]:
+        """
+        Export advertisement HTML bodies to files with nested directory structure.
+
+        This method extracts HTML content from advertisements in the database and
+        saves each one to a file within a nested directory structure based on
+        filter matches defined in the configuration.
+
+        Args:
+            connection: SQLite database connection
+            output_dir: Base directory for exported HTML files
+            config_path: Path to the configuration file with filter definitions
+            min_id: Minimum advertisement ID to export (inclusive)
+            max_id: Maximum advertisement ID to export (inclusive)
+
+        Returns:
+            Tuple containing (total_exported, category_counts)
+            where category_counts is a dictionary of category:count pairs
+        """
+        logger = logging.getLogger(f"{__name__}.export_html_bodies")
+        logger.info("Starting HTML body export process")
+
+        # Load filter configuration
+        filters = Harvester._load_filter_configuration(config_path)
+        if not filters:
+            logger.error("No valid filters found in configuration. Aborting export.")
+            return (0, {})
+
+        # Compile regular expressions for each filter
+        compiled_filters = Harvester._compile_filters(filters)
+        logger.debug(
+            "Compiled %d filter categories with %d total filters",
+            len(compiled_filters),
+            sum(
+                len(category_filters) for category_filters in compiled_filters.values()
+            ),
+        )
+
+        # Ensure output directory exists
+        base_path = Path(output_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Retrieve advertisements from database
+        cursor = connection.cursor()
+        query = """
+            SELECT a.id, a.html_body, a.url, a.ad_type 
+            FROM advertisements a
+            WHERE EXISTS (SELECT 1 FROM keyword_advertisement ka WHERE ka.advertisement_id = a.id)
+        """
+
+        params = []
+        if min_id is not None:
+            query += " AND a.id >= ?"
+            params.append(min_id)
+        if max_id is not None:
+            query += " AND a.id <= ?"
+            params.append(max_id)
+
+        query += " ORDER BY a.id ASC"
+
+        cursor.execute(query, params)
+
+        # Process results and export files
+        total_exported = 0
+        category_counts = {category: 0 for category in compiled_filters.keys()}
+        batch_size = 100
+
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+
+            for row in rows:
+                ad_id, html_body, url, ad_type = row
+
+                # Determine portal name from ad_type or URL
+                portal_name = Harvester._extract_portal_name(ad_type, url)
+
+                # Create the file path based on filter matches
+                rel_path_parts = Harvester._determine_path_from_filters(
+                    html_body, compiled_filters, category_counts
+                )
+
+                # Skip if no filters matched at all
+                if not rel_path_parts:
+                    logger.warning(
+                        "Advertisement ID %d did not match any filters and will not be exported",
+                        ad_id,
+                    )
+                    continue
+
+                # Format file name: portal_00001.html
+                file_name = f"{portal_name}_{ad_id:05d}.html"
+
+                # Build full path
+                full_path = base_path.joinpath(*rel_path_parts, file_name)
+
+                # Ensure directory exists
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Write HTML to file
+                try:
+                    with open(full_path, "w", encoding="utf-8") as f:
+                        f.write(html_body)
+
+                    cursor_inner = connection.cursor()
+
+                    # Update the filename in the database
+                    rel_file_path = str(full_path.relative_to(base_path))
+                    cursor_inner.execute(
+                        "UPDATE advertisements SET filename = ? WHERE id = ?",
+                        (rel_file_path, ad_id),
+                    )
+
+                    total_exported += 1
+                    if total_exported % 100 == 0:
+                        logger.info("Exported %d advertisement files", total_exported)
+                        connection.commit()  # Commit periodically
+
+                except IOError as e:
+                    logger.error("Failed to write file %s: %s", full_path, e)
+
+        # Final commit
+        connection.commit()
+
+        logger.info(
+            "Export completed. Exported %d advertisement files to %s",
+            total_exported,
+            base_path,
+        )
+
+        return (total_exported, category_counts)
+
+    @staticmethod
+    def _extract_portal_name(ad_type: str, url: str) -> str:
+        """
+        Extract a clean portal name from ad_type or URL.
+
+        Args:
+            ad_type: Advertisement type class name
+            url: URL of the advertisement
+
+        Returns:
+            Cleaned portal name suitable for filename
+        """
+        if ad_type:
+            # Remove "Advertisement" suffix if present
+            portal_name = ad_type.lower().replace("advertisement", "")
+            if portal_name:
+                return portal_name
+
+        # Fallback to extracting from URL
+        try:
+            netloc = urlparse(url).netloc
+            parts = netloc.split(".")
+            if len(parts) >= 2:
+                return parts[
+                    -2
+                ]  # Get the main domain name (e.g. "karriere" from "www.karriere.at")
+        except (ValueError, IndexError):
+            pass
+
+        return "unknown"
+
+    @staticmethod
+    def _determine_path_from_filters(
+        html_body: str,
+        compiled_filters: Dict[str, Dict[str, Tuple[Pattern, bool]]],
+        category_counts: Dict[str, int],
+    ) -> List[str]:
+        """
+        Determine the path components based on filter matches.
+
+        Args:
+            html_body: HTML content to match against filters
+            compiled_filters: Dictionary of compiled regex patterns
+            category_counts: Dictionary to track match counts by category
+
+        Returns:
+            List of path components to form the directory structure
+        """
+        rel_path_parts = []
+        for category, category_filters in compiled_filters.items():
+            # Find the first matching filter in this category
+            matched = False
+            for filter_name, (pattern, is_catch_all) in category_filters.items():
+                if is_catch_all:
+                    continue  # Skip catch-all filters on first pass
+
+                if pattern.search(html_body):
+                    rel_path_parts.append(filter_name)
+                    category_counts[category] += 1
+                    matched = True
+                    break
+
+            if not matched:
+                # Look for catch-all filter if no match was found
+                for filter_name, (pattern, is_catch_all) in category_filters.items():
+                    if is_catch_all:
+                        rel_path_parts.append(filter_name)
+                        category_counts[category] += 1
+                        break
+
+        return rel_path_parts
+
+    @staticmethod
+    def _load_filter_configuration(
+        config_path: str,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Load filter configuration from YAML file.
+
+        Args:
+            config_path: Path to the configuration file
+
+        Returns:
+            Dictionary containing filter categories and their configurations
+        """
+        logger = logging.getLogger(f"{__name__}._load_filter_configuration")
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            # Extract filter configuration
+            if not config or not isinstance(config, dict) or "filters" not in config:
+                logger.error("Invalid configuration format: missing 'filters' section")
+                return {}
+
+            return config["filters"]
+
+        except (yaml.YAMLError, IOError) as e:
+            logger.error("Failed to load configuration file: %s", e)
+            return {}
+
+    @staticmethod
+    def _compile_filters(
+        filters: Dict[str, Dict[str, Dict[str, Any]]],
+    ) -> Dict[str, Dict[str, Tuple[Pattern, bool]]]:
+        """
+        Compile regular expressions for each filter.
+
+        Args:
+            filters: Filter configuration dictionary
+
+        Returns:
+            Dictionary of compiled regex patterns with their catch_all status
+        """
+        logger = logging.getLogger(f"{__name__}._compile_filters")
+        compiled_filters = {}
+
+        for category, category_filters in filters.items():
+            compiled_filters[category] = {}
+
+            for filter_name, filter_config in category_filters.items():
+                pattern = filter_config.get("pattern", "")
+                is_catch_all = filter_config.get("catch_all", False)
+                case_sensitive = filter_config.get("case_sensitive", False)
+
+                try:
+                    flags = 0 if case_sensitive else re.IGNORECASE
+                    compiled_pattern = re.compile(pattern, flags)
+                    compiled_filters[category][filter_name] = (
+                        compiled_pattern,
+                        is_catch_all,
+                    )
+                except re.error as e:
+                    logger.error(
+                        "Invalid regular expression in filter %s.%s: %s",
+                        category,
+                        filter_name,
+                        e,
+                    )
+
+        return compiled_filters
 
 
 class StepStoneHarvester(Harvester):
