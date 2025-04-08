@@ -117,33 +117,39 @@ keywords:
     search: buchhalt
     case_sensitive: false
 filters:
-  - education:
-    - higher_education:
+  education_level:
+    higher_education:
       catch_all: false
       case_sensitive: false
-      search:
-        - \babgeschloss.*studium\b
-        - \bstudium.*abgeschlossen\b
-        - \bbachelor.*studium\b
-        - \bmasterstudium\b
-        - \bgraduate.*degree\b
-        - \buniversity.*degree\b
-    - name: unknown
-      catch_all: true
-  - arrangement:
-    - name: full_time
+      pattern: '\babgeschloss.*studium\b|\bstudium.*abgeschlossen\b|\bbachelor.*studium\b|\bmasterstudium\b|\bgraduate.*degree\b|\buniversity.*degree\b'
+      description: "Higher education positions"
+    vocational:
       catch_all: false
       case_sensitive: false
-      search:
-        - \bvollzeit\b
-        - \bfull[\s-]*time\b
-    - name: part_time
+      pattern: '\bberufsausbildung\b|\blehre\b|\bhandwerkliche.*ausbildung\b|\bhandwerkliche.*lehre\b|\bberufsbegleitend.*studium\b'
+      description: "Vocational training positions"
+    other_education:
       catch_all: false
       case_sensitive: false
-      search:
-        - \bteilzeit\b
-        - \bpart[\s-]*time\b
-    - name: unknown
-      catch_all: true
+      pattern: '.*'
+      description: "Other education positions"
+  job_type:
+    full_time:
+      catch_all: false
+      case_sensitive: false
+      pattern: '\bvollzeit\b|\bfull[\s-]*time\b'
+    part_time:
+      catch_all: false
+      case_sensitive: false
+      pattern: '\bteilzeit\b|\bpart[\s-]*time\b'
+    internship:
+      catch_all: false
+      case_sensitive: false
+      pattern: '\bpraktik\b|\binternship\b'
+    other_job_type:
+      catch_all: false
+      case_sensitive: false
+      pattern: '.*'
+      description: "Other job types"
   
     
