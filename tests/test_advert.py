@@ -1,9 +1,17 @@
 import sys
 import unittest
 import os
+import logging
 from bs4 import BeautifulSoup
 from unittest.mock import patch, MagicMock, mock_open
 from typing import Dict, Any
+
+# Configure logging at DEBUG level
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))

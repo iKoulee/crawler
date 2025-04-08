@@ -7,6 +7,13 @@ import sqlite3
 from unittest.mock import patch, MagicMock, mock_open
 from typing import Dict, Any, List
 
+# Configure logging at DEBUG level
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 # Add src directory to path for importing crawler module
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
