@@ -43,7 +43,18 @@ class Harvester:
 
     @staticmethod
     def create_schema(connection: sqlite3.Connection) -> None:
+        """
+        Create the database schema if it doesn't exist.
+
+        This method creates the tables needed for storing advertisements, keywords,
+        and the relationships between them.
+
+        Args:
+            connection: SQLite database connection
+        """
         cursor = connection.cursor()
+
+        # Create advertisements table with the updated schema
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS advertisements (
@@ -52,15 +63,17 @@ class Harvester:
                 description TEXT,
                 company TEXT,
                 location TEXT,
-                harvest_date DATE,
                 url TEXT NOT NULL UNIQUE,
                 html_body TEXT NOT NULL,
-                html_status INTEGER NOT NULL,
+                http_status INTEGER NOT NULL,
                 ad_type TEXT NOT NULL,
+                filename TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+
+        # Create keywords table
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS keywords (
@@ -71,17 +84,28 @@ class Harvester:
             )
             """
         )
+
+        # Create many-to-many relationship table
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS keyword_advertisement (
                 keyword_id INTEGER,
                 advertisement_id INTEGER,
                 FOREIGN KEY (keyword_id) REFERENCES keywords(id),
-                FOREIGN KEY (advertisement_id) REFERENCES advertisements(id)
+                FOREIGN KEY (advertisement_id) REFERENCES advertisements(id),
                 PRIMARY KEY (keyword_id, advertisement_id)
             )
             """
         )
+
+        # Create indexes for better performance
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_advertisements_url ON advertisements(url)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_advertisements_ad_type ON advertisements(ad_type)"
+        )
+
         connection.commit()
 
     @staticmethod
@@ -134,7 +158,7 @@ class Harvester:
         has a successful HTTP status code (200), and contains some HTML content.
 
         Args:
-            connection: SQLite database connection
+            db_file_name: Path to the SQLite database file
             url: URL of the advertisement to check
 
         Returns:
@@ -144,7 +168,7 @@ class Harvester:
         cursor = connection.cursor()
         cursor.execute(
             """
-            SELECT url, html_status, html_body 
+            SELECT url, http_status, html_body 
             FROM advertisements 
             WHERE url = ?
             """,
@@ -203,7 +227,11 @@ class Harvester:
                 continue
             # Insert the advertisement into the database
             cursor.execute(
-                "INSERT INTO advertisements (title, company, location, description, html_body, html_status, url, ad_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO advertisements 
+                (title, company, location, description, html_body, http_status, url, ad_type, filename) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 (
                     advert.get_title(),
                     advert.get_company(),
@@ -213,6 +241,7 @@ class Harvester:
                     advert.status,
                     advert.link,
                     advert.__class__.__name__,
+                    None,  # Default filename to None initially
                 ),
             )
             advert_id = cursor.lastrowid
@@ -309,7 +338,7 @@ class Harvester:
 
         # Build the query with optional ID filters
         query = """
-            SELECT a.id, a.ad_type, a.html_body, a.url, a.created_at
+            SELECT a.id, a.ad_type, a.html_body, a.url, a.created_at, a.filename
             FROM advertisements a
             WHERE EXISTS (
                 SELECT 1 FROM keyword_advertisement ka
@@ -346,8 +375,9 @@ class Harvester:
             title = ad.get_title() or ""
             company = ad.get_company() or ""
             location = ad.get_location() or ""
-            harvest_date = data[4] or ""
+            created_at = data[4] or ""
             url = data[3] or ""
+            filename = data[5] or ""
 
             # Get related keywords
             cursor.execute(
@@ -373,10 +403,11 @@ class Harvester:
                 "title": title,
                 "company": company,
                 "location": location,
-                "harvest_date": harvest_date,
+                "date": created_at,
                 "url": url,
                 "portal": urlparse(url).netloc,
                 "keywords": keyword_titles,
+                "filename": filename,
             }
 
             result.append(ad_data)
@@ -418,6 +449,7 @@ class Harvester:
             "url",
             "portal",
             "related_keywords",
+            "filename",
         ]
 
         logger.info(
@@ -438,13 +470,14 @@ class Harvester:
                             "job_title": ad["title"],
                             "company_name": ad["company"],
                             "location": ad["location"],
-                            "harvest_date": ad["harvest_date"],
+                            "harvest_date": ad["date"],
                             "url": ad["url"],
                             "portal": ad["portal"],
                             "related_keywords": "; ".join(ad["keywords"]),
+                            "filename": ad["filename"] or "",
                         }
                     )
-            logger.info("CSV export completed successfully")
+                logger.info("CSV export completed successfully")
         except IOError as e:
             logger.error("Failed to write CSV file: %s", e)
             raise
@@ -486,6 +519,7 @@ class Harvester:
             "url",
             "portal",
             "related_keywords",
+            "filename",
         ]
 
         # Write to CSV string
@@ -499,10 +533,11 @@ class Harvester:
                     "job_title": ad["title"],
                     "company_name": ad["company"],
                     "location": ad["location"],
-                    "harvest_date": ad["harvest_date"],
+                    "harvest_date": ad["date"],
                     "url": ad["url"],
                     "portal": ad["portal"],
                     "related_keywords": "; ".join(ad["keywords"]),
+                    "filename": ad["filename"] or "",
                 }
             )
 

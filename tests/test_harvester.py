@@ -2,7 +2,7 @@ import logging
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import call, patch, MagicMock
 from time import time, sleep
 import sys
 import os
@@ -506,14 +506,16 @@ class TestIneedHarvester(unittest.TestCase):
 
     def setUp(self):
         # Set up an in-memory SQLite database for testing
-        self.temp_db_file = tempfile.mkstemp(suffix=".db")[1]
-        self.connection = sqlite3.connect(self.temp_db_file)
-        # self.connection = sqlite3.connect(":memory:")
+        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False)
+        self.db_path = self.temp_db_file.name
+        self.temp_db_file.close()
+        self.connection = sqlite3.connect(self.db_path)
         Harvester.create_schema(self.connection)
 
     def tearDown(self):
         # Close the database connection after each test
         self.connection.close()
+        os.unlink(self.db_path)
 
     def test_get_next_link(self):
         config = {"url": "https://www.monster.de", "requests_per_minute": 60}
@@ -536,7 +538,7 @@ class TestIneedHarvester(unittest.TestCase):
         harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
         with self.assertRaises(NotImplementedError) as context:
-            harvester.harvest(self.temp_db_file)
+            harvester.harvest(self.db_path)
 
         self.assertEqual(
             str(context.exception),
@@ -641,6 +643,145 @@ class TestFetchKeywords(unittest.TestCase):
         self.assertTrue(2 in keywords)
         self.assertEqual(keywords[1].pattern, r"manager")
         self.assertEqual(keywords[2].pattern, r"controll")
+
+
+class TestHarvesterMethods(unittest.TestCase):
+    """Test cases for Harvester class methods."""
+
+    def setUp(self) -> None:
+        """Set up test environment with a temporary database."""
+        self.temp_db = tempfile.NamedTemporaryFile(delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+
+        # Create connection and schema
+        self.connection = sqlite3.connect(self.db_path)
+        Harvester.create_schema(self.connection)
+
+        # Sample data for testing
+        self.test_url = "https://example.com/job/12345"
+        self.test_html = "<html><body><h1>Test Job</h1></body></html>"
+
+    def tearDown(self) -> None:
+        """Clean up test environment."""
+        self.connection.close()
+        os.unlink(self.db_path)
+
+    def test_advertisement_exists_with_updated_schema(self) -> None:
+        """Test advertisement_exists method with updated schema."""
+        cursor = self.connection.cursor()
+
+        # Insert test advertisement with new schema
+        cursor.execute(
+            """
+            INSERT INTO advertisements 
+            (url, html_body, http_status, ad_type, filename) 
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (self.test_url, self.test_html, 200, "TestAdvertisement", "test_file.html"),
+        )
+        self.connection.commit()
+
+        # Create harvester instance
+        harvester = Harvester({"url": "https://example.com"})
+
+        # Test exists method
+        exists = harvester.advertisement_exists(self.db_path, self.test_url)
+        self.assertTrue(exists)
+
+        # Test with non-existent URL
+        non_existent = harvester.advertisement_exists(
+            self.db_path, "https://example.com/job/99999"
+        )
+        self.assertFalse(non_existent)
+
+        # Test with unsuccessful status code
+        cursor.execute(
+            """
+            INSERT INTO advertisements 
+            (url, html_body, http_status, ad_type, filename) 
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "https://example.com/job/404",
+                self.test_html,
+                404,  # Not successful
+                "TestAdvertisement",
+                "error_file.html",
+            ),
+        )
+        self.connection.commit()
+
+        not_successful = harvester.advertisement_exists(
+            self.db_path, "https://example.com/job/404"
+        )
+        self.assertFalse(not_successful)
+
+    def test_fetch_advertisements_by_id_range(self) -> None:
+        """Test fetch_advertisements_by_id_range with the updated schema."""
+        # Insert test data with filename
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO advertisements 
+            (title, url, html_body, http_status, ad_type, filename) 
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "Test Job",
+                self.test_url,
+                self.test_html,
+                200,
+                "TestAdvertisement",
+                "job_12345.html",
+            ),
+        )
+        ad_id = cursor.lastrowid
+
+        # Add keyword association
+        cursor.execute(
+            "INSERT INTO keywords (title, search) VALUES (?, ?)", ("Python", "python")
+        )
+        keyword_id = cursor.lastrowid
+
+        cursor.execute(
+            "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+            (keyword_id, ad_id),
+        )
+        self.connection.commit()
+
+        # Patch the AdFactory.create method to return a mock advertisement
+        mock_ad = MagicMock()
+        mock_ad.get_title.return_value = "Test Job"
+        mock_ad.get_company.return_value = "Test Company"
+        mock_ad.get_location.return_value = "Test Location"
+        mock_ad.get_description.return_value = "Test Description"
+
+        with patch("harvester.AdFactory.create", return_value=mock_ad):
+            results = Harvester.fetch_advertisements_by_id_range(self.connection)
+
+            self.assertEqual(len(results), 1)
+            result = results[0]
+
+            # Check for new field
+            self.assertEqual(result["filename"], "job_12345.html")
+
+            # Check that date now comes from created_at
+            self.assertIn("date", result)
+
+            # Check that all fields are present
+            expected_keys = {
+                "id",
+                "title",
+                "company",
+                "location",
+                "date",
+                "url",
+                "portal",
+                "keywords",
+                "filename",
+            }
+            self.assertTrue(all(key in result for key in expected_keys))
 
 
 if __name__ == "__main__":

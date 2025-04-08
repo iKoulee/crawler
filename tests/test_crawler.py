@@ -160,5 +160,107 @@ class TestThreadManagement(unittest.TestCase):
         self.assertEqual(mock_thread_instance.join.call_count, 2)
 
 
+class TestDatabaseOperations(unittest.TestCase):
+    """Test cases for database operations."""
+
+    def setUp(self) -> None:
+        """Set up test environment with a temporary database."""
+        # Create a temporary database file
+        self.temp_db = tempfile.NamedTemporaryFile(delete=False)
+        self.db_path = self.temp_db.name
+        self.temp_db.close()
+
+        # Create connection and schema
+        self.connection = sqlite3.connect(self.db_path)
+        Harvester.create_schema(self.connection)
+
+    def tearDown(self) -> None:
+        """Clean up test environment."""
+        self.connection.close()
+        os.unlink(self.db_path)
+
+    def test_database_schema(self) -> None:
+        """Test that the database schema is created correctly."""
+        cursor = self.connection.cursor()
+
+        # Check advertisements table
+        cursor.execute("PRAGMA table_info(advertisements)")
+        columns = {row[1]: row for row in cursor.fetchall()}
+
+        # Verify required columns exist
+        self.assertIn("id", columns)
+        self.assertIn("title", columns)
+        self.assertIn("url", columns)
+        self.assertIn("http_status", columns)  # Updated from html_status
+        self.assertIn("filename", columns)  # New column
+
+        # Verify harvest_date column no longer exists
+        self.assertNotIn("harvest_date", columns)
+
+        # Check keyword_advertisement table
+        cursor.execute("PRAGMA foreign_key_list(keyword_advertisement)")
+        foreign_keys = cursor.fetchall()
+
+        # Verify foreign keys are set up correctly
+        self.assertTrue(any(fk[2] == "advertisements" for fk in foreign_keys))
+        self.assertTrue(any(fk[2] == "keywords" for fk in foreign_keys))
+
+    def test_export_to_csv(self) -> None:
+        """Test exporting advertisements to CSV."""
+        cursor = self.connection.cursor()
+
+        # Insert test data
+        cursor.execute(
+            """
+            INSERT INTO advertisements 
+            (title, company, location, url, html_body, http_status, ad_type, filename) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "Test Job",
+                "Test Company",
+                "Test Location",
+                "http://example.com",
+                "<html></html>",
+                200,
+                "KarriereAdvertisement",
+                "test_file.html",
+            ),
+        )
+        ad_id = cursor.lastrowid
+
+        # Insert test keyword
+        cursor.execute(
+            "INSERT INTO keywords (title, search, case_sensitive) VALUES (?, ?, ?)",
+            ("Python", "python", 0),
+        )
+        keyword_id = cursor.lastrowid
+
+        # Link keyword to advertisement
+        cursor.execute(
+            "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+            (keyword_id, ad_id),
+        )
+
+        self.connection.commit()
+
+        # Test CSV export
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as temp_csv:
+            csv_path = temp_csv.name
+
+        try:
+            record_count = Harvester.export_to_csv(self.connection, csv_path)
+            self.assertEqual(record_count, 1)
+
+            # Check CSV content
+            with open(csv_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                self.assertIn("Test Job", content)
+                self.assertIn("Test Company", content)
+                self.assertIn("test_file.html", content)  # New filename field
+        finally:
+            os.unlink(csv_path)
+
+
 if __name__ == "__main__":
     unittest.main()
