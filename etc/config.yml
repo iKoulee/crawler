@@ -116,3 +116,34 @@ keywords:
   - title: "Buchhalter*in"
     search: buchhalt
     case_sensitive: false
+filters:
+  - education:
+    - higher_education:
+      catch_all: false
+      case_sensitive: false
+      search:
+        - \babgeschloss.*studium\b
+        - \bstudium.*abgeschlossen\b
+        - \bbachelor.*studium\b
+        - \bmasterstudium\b
+        - \bgraduate.*degree\b
+        - \buniversity.*degree\b
+    - name: unknown
+      catch_all: true
+  - arrangement:
+    - name: full_time
+      catch_all: false
+      case_sensitive: false
+      search:
+        - \bvollzeit\b
+        - \bfull[\s-]*time\b
+    - name: part_time
+      catch_all: false
+      case_sensitive: false
+      search:
+        - \bteilzeit\b
+        - \bpart[\s-]*time\b
+    - name: unknown
+      catch_all: true
+  
+    
