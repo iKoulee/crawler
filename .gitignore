@@ -214,3 +214,6 @@ nb-configuration.xml
 # VS Code
 .vscode/
 *.code-workspace
+
+# exported files
+adverts
