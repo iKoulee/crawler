@@ -192,7 +192,7 @@ The crawler has three main commands:
 Harvest job advertisements from configured portals:
 
 ```bash
-python src/crawler.py harvest
+python src/crawler.py harvest -d advertisements.db
 ```
 
 This command will fetch job advertisements from the portals defined in `config.yml` and store them in the SQLite database.
@@ -202,7 +202,7 @@ This command will fetch job advertisements from the portals defined in `config.y
 Analyze the harvested job advertisements for keyword matches:
 
 ```bash
-python src/crawler.py analyze
+python src/crawler.py -l INFO assembly -c etc/config.yml -d advertisements.db -o advertisements.csv
 ```
 
 This command will process the stored job advertisements and identify matches based on the keywords defined in `config.yml`.
@@ -212,13 +212,7 @@ This command will process the stored job advertisements and identify matches bas
 Export the analyzed results to the desired format:
 
 ```bash
-python src/crawler.py export --format [csv|html]
-```
-
-Additional options for HTML export:
-
-```bash
-python src/crawler.py export --format html --filter export_filters.yml
+python src/crawler.py =l INFO export -c etc/config.yml -d advertisements.db -o output_dir
 ```
 
 This command will organize the exported HTML files into a nested directory structure based on the filters defined in `export_filters.yml`.
