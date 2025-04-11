@@ -5,7 +5,8 @@ import yaml
 import argparse
 import os
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
+import re
 
 from harvester import Harvester, HarvesterFactory
 
@@ -156,6 +157,244 @@ def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
         logger.exception("Unexpected error: %s", e)
 
 
+def analyze_command(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """
+    Execute the analyze command to refresh keyword matching on all advertisements.
+
+    This command:
+    1. Truncates existing keywords and keyword_advertisement tables
+    2. Reinserts keywords from the configuration file
+    3. Updates advertisement keyword matches based on content
+
+    Args:
+        args: Command line arguments
+        logger: Logger instance
+    """
+    try:
+        # Load configuration
+        with open(args.config) as config_handle:
+            config: Dict[str, Any] = yaml.safe_load(config_handle)
+            logger.debug("Loaded configuration from %s", args.config)
+
+        # Connect to the database
+        connection = sqlite3.connect(args.database)
+        logger.debug("Connected to database: %s", args.database)
+
+        # Reset keyword tables
+        reset_keyword_tables(connection, logger)
+
+        # Insert keywords from config
+        insert_keywords_from_config(connection, config, logger)
+
+        # Process advertisements
+        process_advertisements(connection, logger)
+
+        connection.close()
+        logger.info("Analysis completed successfully.")
+
+    except FileNotFoundError:
+        logger.error("Config file '%s' not found.", args.config)
+    except yaml.YAMLError:
+        logger.error("Invalid YAML in config file '%s'.", args.config)
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+    except Exception as e:
+        logger.exception("Unexpected error during analysis: %s", e)
+
+
+def reset_keyword_tables(
+    connection: sqlite3.Connection, logger: logging.Logger
+) -> None:
+    """
+    Truncate the keywords and keyword_advertisement tables.
+
+    Args:
+        connection: SQLite database connection
+        logger: Logger instance
+    """
+    cursor = connection.cursor()
+
+    # Truncate keyword_advertisement first due to foreign key constraints
+    logger.info("Truncating keyword_advertisement table")
+    cursor.execute("DELETE FROM keyword_advertisement")
+
+    # Then truncate keywords table
+    logger.info("Truncating keywords table")
+    cursor.execute("DELETE FROM keywords")
+
+    # Commit changes
+    connection.commit()
+    logger.debug("Keyword tables reset successfully")
+
+
+def insert_keywords_from_config(
+    connection: sqlite3.Connection, config: Dict[str, Any], logger: logging.Logger
+) -> int:
+    """
+    Insert keywords from configuration file into the database.
+
+    Args:
+        connection: SQLite database connection
+        config: Configuration dictionary containing keywords
+        logger: Logger instance
+
+    Returns:
+        Number of keywords inserted
+    """
+    if "keywords" not in config or not config["keywords"]:
+        logger.warning("No keywords found in configuration")
+        return 0
+
+    logger.info("Inserting %d keywords from configuration", len(config["keywords"]))
+    count = 0
+
+    for keyword in config["keywords"]:
+        try:
+            Harvester.insert_keyword(connection, keyword)
+            count += 1
+            logger.debug("Inserted keyword: %s", keyword.get("title", "Unnamed"))
+        except Exception as e:
+            logger.warning("Failed to insert keyword: %s", e)
+
+    logger.info("Inserted %d keywords successfully", count)
+    return count
+
+
+def process_advertisements(
+    connection: sqlite3.Connection, logger: logging.Logger
+) -> int:
+    """
+    Process all advertisements in the database to match with keywords.
+
+    Args:
+        connection: SQLite database connection
+        logger: Logger instance
+
+    Returns:
+        Number of advertisements processed
+    """
+    cursor = connection.cursor()
+
+    # Get all advertisements
+    logger.info("Fetching advertisements from database")
+    cursor.execute("SELECT id, html_body FROM advertisements")
+    ads = cursor.fetchall()
+
+    if not ads:
+        logger.warning("No advertisements found in database")
+        return 0
+
+    logger.info("Processing %d advertisements for keyword matches", len(ads))
+
+    # Fetch keywords using static method
+    regexes = Harvester.fetch_keywords(connection)
+    if not regexes:
+        logger.warning("No keywords found for matching")
+        return 0
+
+    logger.debug("Using %d keywords for matching", len(regexes))
+
+    # Process each advertisement
+    return match_advertisements_with_keywords(connection, ads, regexes, logger)
+
+
+def match_advertisements_with_keywords(
+    connection: sqlite3.Connection,
+    ads: List[Tuple[int, str]],
+    regexes: Dict[int, re.Pattern],
+    logger: logging.Logger,
+) -> int:
+    """
+    Match advertisements with keywords and update the keyword_advertisement table.
+
+    Args:
+        connection: SQLite database connection
+        ads: List of tuples containing (ad_id, html_body)
+        regexes: Dictionary of compiled regex patterns for keywords
+        logger: Logger instance
+
+    Returns:
+        Number of advertisement-keyword matches created
+    """
+    cursor = connection.cursor()
+    total_matches = 0
+    processed_count = 0
+    batch_size = 100
+
+    for ad_id, html_body in ads:
+        # Create a temporary Advertisement instance to use matching logic
+        from advert import Advertisement
+
+        ad = Advertisement(source=html_body)
+
+        # Match keywords
+        matched_keywords = match_keywords_for_ad(ad, regexes, logger)
+
+        # Insert matches into database
+        for keyword_id in matched_keywords:
+            try:
+                cursor.execute(
+                    "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+                    (keyword_id, ad_id),
+                )
+                total_matches += 1
+            except sqlite3.Error as e:
+                logger.warning(
+                    "Error linking ad %d with keyword %d: %s", ad_id, keyword_id, e
+                )
+
+        processed_count += 1
+
+        # Commit in batches to avoid large transactions
+        if processed_count % batch_size == 0:
+            connection.commit()
+            logger.debug(
+                "Processed %d advertisements (%d matches so far)",
+                processed_count,
+                total_matches,
+            )
+
+    # Final commit
+    connection.commit()
+    logger.info(
+        "Created %d keyword matches for %d advertisements",
+        total_matches,
+        processed_count,
+    )
+
+    return processed_count
+
+
+def match_keywords_for_ad(
+    ad: "Advertisement", regexes: Dict[int, re.Pattern], logger: logging.Logger
+) -> List[int]:
+    """
+    Match an advertisement against keywords and return matching keyword IDs.
+
+    Args:
+        ad: Advertisement instance to check
+        regexes: Dictionary of compiled regex patterns for keywords
+        logger: Logger instance
+
+    Returns:
+        List of keyword IDs that match the advertisement
+    """
+    # Extract the HTML content from the advertisement
+    matched_keywords = []
+    description = ad.get_description()
+
+    # If no description, check the raw source
+    if not description:
+        description = ad.source
+
+    # Match against each keyword regex
+    for keyword_id, regex in regexes.items():
+        if regex.search(description):
+            matched_keywords.append(keyword_id)
+
+    return matched_keywords
+
+
 def main() -> None:
     """
     Main function that parses command line arguments and dispatches to subcommands.
@@ -267,6 +506,22 @@ def main() -> None:
         help="Maximum advertisement ID to include",
     )
 
+    # Create the parser for the "analyze" command
+    analyze_parser = subparsers.add_parser(
+        "analyze", help="Refresh keyword matching on all advertisements"
+    )
+    analyze_parser.add_argument(
+        "-d",
+        "--database",
+        required=False,
+        type=str,
+        default=os.path.join(os.getcwd(), "crawler.db"),
+        help="Path to the database file",
+    )
+    analyze_parser.add_argument(
+        "-c", "--config", required=True, type=str, help="Path to the config file"
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -281,8 +536,12 @@ def main() -> None:
         assembly_command(args, logger)
     elif args.command == "export":
         export_command(args, logger)
+    elif args.command == "analyze":
+        analyze_command(args, logger)
     else:
-        logger.error("No command specified. Use 'harvest', 'assembly', or 'export'.")
+        logger.error(
+            "No command specified. Use 'harvest', 'assembly', 'export', or 'analyze'."
+        )
         parser.print_help()
 
 

@@ -120,7 +120,17 @@ class Harvester:
         )
         connection.commit()
 
-    def fetch_keywords(self, connection: sqlite3.Connection) -> Dict[int, re.Pattern]:
+    @staticmethod
+    def fetch_keywords(connection: sqlite3.Connection) -> Dict[int, re.Pattern]:
+        """
+        Fetch and compile keywords from the database.
+
+        Args:
+            connection: SQLite database connection
+
+        Returns:
+            Dictionary mapping keyword IDs to compiled regex patterns
+        """
         cursor = connection.cursor()
         cursor.execute("SELECT id, search, case_sensitive FROM keywords")
         result = cursor.fetchall()
@@ -925,6 +935,22 @@ class KarriereHarvester(Harvester):
                 continue
 
             response = self._get(link, headers=self._headers, cookies=self.cookies)
+
+            if response.status_code in (500, 502, 503, 504):
+                self.logger.warning(
+                    "Server error fetching %s: %d, retrying in 5 minutes",
+                    link,
+                    response.status_code,
+                )
+                sleep(5 * 60)  # Wait for 5 minutes before retrying
+                response = self._get(link, headers=self._headers, cookies=self.cookies)
+
+            if response.status_code != 200:
+                self.logger.error(
+                    "Failed to fetch %s: HTTP %d", link, response.status_code
+                )
+                continue
+
             response.raise_for_status()
             response.encoding = response.apparent_encoding
 
