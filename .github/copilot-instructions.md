@@ -79,6 +79,32 @@ This document outlines the coding standards and development practices to be foll
 - Indent SQL statements for readability.
 - Use meaningful table and column names.
 
+## Object-Oriented Programming Best Practices
+
+### General OOP Principles
+
+- **Encapsulation**: Hide implementation details and expose only necessary interfaces. Use private attributes with appropriate getters and setters when needed.
+- **Inheritance**: Use inheritance when there is a true "is-a" relationship. Prefer composition over inheritance when possible.
+- **Polymorphism**: Design flexible interfaces that allow objects of different types to be treated uniformly.
+- **Abstraction**: Create abstractions that hide complexity and expose only what's necessary.
+
+### Class Design
+
+- Create cohesive classes with a single, well-defined responsibility.
+- Keep class interfaces simple and intuitive, using consistent naming patterns.
+- Design classes to be open for extension but closed for modification (Open/Closed Principle).
+- Implement dependency injection to reduce tight coupling between classes.
+- Use abstract classes and interfaces to define contracts and enable polymorphism.
+- Make base classes abstract when they represent concepts rather than concrete objects.
+
+### Object Relationships
+
+- Prefer composition over inheritance when objects have a "has-a" relationship rather than an "is-a" relationship.
+- Use interfaces to define behavior contracts that multiple unrelated classes can implement.
+- Apply the Liskov Substitution Principle: subtypes should be substitutable for their base types without altering program correctness.
+- Avoid deep inheritance hierarchies (typically no more than 2-3 levels deep).
+- Use delegation when behavior should be shared but an "is-a" relationship is inappropriate.
+
 ## Clean Code Principles (Kent Beck Style)
 
 ### General Principles
@@ -111,6 +137,54 @@ Follow Kent Beck's rigorous TDD approach:
 - Keep tests independent of each other.
 - Focus on behavior, not implementation details.
 - Run tests frequently.
+
+## Code Size and Complexity Guidelines
+
+### Change Size Limitations
+
+- **Incremental Changes**: Any single code change should not exceed 50 lines. This includes:
+  - New functions or methods
+  - Modifications to existing code
+  - Class definitions
+  - Configuration updates
+  
+- **Review Process**: After implementing a change within this 50-line limit:
+  - Submit for review
+  - Wait for approval before proceeding with related changes
+  - This ensures that changes are small, focused, and reviewable
+
+- **Exceptions**: In rare cases where a larger change is unavoidable:
+  - Document the reasoning
+  - Consider breaking the change into smaller logical parts
+  - Discuss with the team before proceeding
+
+### Function and Method Size Constraints
+
+- **General Limit**: Functions, methods, and routines should not exceed 20 lines of code.
+  
+- **Benefits of Short Functions**:
+  - Improved readability and comprehension
+  - Easier testing and debugging
+  - Better function naming that describes a single purpose
+  - Simplified maintenance
+  - More opportunities for code reuse
+
+- **Acceptable Exceptions**:
+  - Data transformation routines with consistent logic
+  - State machines with clear, repetitive patterns
+  - Generated code
+  - Cases where breaking the function would reduce clarity rather than improve it
+  
+- **Implementation Strategy**:
+  - Extract repeated code into helper functions
+  - Use the Single Responsibility Principle to identify when functions are doing too much
+  - Name functions precisely to reflect their specific purpose
+  - Consider functional programming patterns to reduce function size
+
+- **Documentation Requirements**: When a function necessarily exceeds 20 lines:
+  - Add detailed comments explaining why the function cannot be further broken down
+  - Clearly document the function's sections and flow
+  - Consider adding diagrams or additional documentation for complex functions
 
 ## Implementation Guidelines
 
