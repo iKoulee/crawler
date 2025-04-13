@@ -42,6 +42,8 @@ class Harvester:
     def __init__(self, config: Dict[str, Any]) -> None:
         self.url: str = config["url"]
         self.requests_per_minute: int = config.get("requests_per_minute", 1)
+        # Add configurable retry_timeout in minutes (default: 5 minutes)
+        self.retry_timeout: int = config.get("retry_timeout", 5)
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
     @staticmethod
@@ -880,7 +882,9 @@ class StepStoneHarvester(Harvester):
                     link,
                     response.status_code,
                 )
-                sleep(5 * 60)  # Wait for 5 minutes before retrying
+                sleep(
+                    self.retry_timeout * 60
+                )  # Wait for retry_timeout minutes before retrying
                 response = self._get(link, headers=self._headers, cookies=self.cookies)
 
             if response.status_code != 200:
@@ -958,7 +962,9 @@ class KarriereHarvester(Harvester):
                     link,
                     response.status_code,
                 )
-                sleep(5 * 60)  # Wait for 5 minutes before retrying
+                sleep(
+                    self.retry_timeout * 60
+                )  # Wait for retry_timeout minutes before retrying
                 response = self._get(link, headers=self._headers, cookies=self.cookies)
 
             if response.status_code != 200:

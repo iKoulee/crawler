@@ -3,13 +3,16 @@ portals:
     url: "https://www.karriere.at/"
     engine: KarriereHarvester
     requests_per_minute: 30
+    retry_timeout: 5  # Wait 5 minutes before retrying after a server error
   - name: "stepstone_at"
     url: "https://www.stepstone.at/"
-    requests_per_minute: 5
+    requests_per_minute: 2
+    retry_timeout: 10  # Wait 10 minutes before retrying after a server error
     engine: StepStoneHarvester
   - name: "stepstone_de"
     url: "https://www.stepstone.de/"
-    requests_per_minute: 5
+    requests_per_minute: 2
+    retry_timeout: 15  # Wait 15 minutes before retrying after a server error
     engine: StepStoneHarvester
 keywords:
   # We are using Python regular expressions to search for the keywords
@@ -151,5 +154,4 @@ filters:
       case_sensitive: false
       pattern: '.*'
       description: "Other job types"
-  
-    
+
