@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 import re
 
+from advert import AdFactory
 from harvester import Harvester, HarvesterFactory
 
 
@@ -162,36 +163,44 @@ def analyze_command(args: argparse.Namespace, logger: logging.Logger) -> None:
     Execute the analyze command to refresh keyword matching on all advertisements.
 
     This command:
-    1. Truncates existing keywords and keyword_advertisement tables
-    2. Reinserts keywords from the configuration file
-    3. Updates advertisement keyword matches based on content
+    1. Initializes an AdvertAnalyzer instance
+    2. Runs the analysis process which:
+       - Optionally truncates existing keywords and keyword_advertisement tables
+       - Reinserts keywords from the configuration file
+       - Updates advertisement keyword matches based on content
 
     Args:
         args: Command line arguments
         logger: Logger instance
     """
     try:
-        # Load configuration
-        with open(args.config) as config_handle:
-            config: Dict[str, Any] = yaml.safe_load(config_handle)
-            logger.debug("Loaded configuration from %s", args.config)
+        from analyzer import AdvertAnalyzer
 
-        # Connect to the database
-        connection = sqlite3.connect(args.database)
-        logger.debug("Connected to database: %s", args.database)
+        logger.info("Initializing advertisement analyzer")
+        analyzer = AdvertAnalyzer(db_path=args.database, config_path=args.config)
 
-        # Reset keyword tables
-        reset_keyword_tables(connection, logger)
+        # Configure analyzer options based on command-line arguments
+        analyzer_options = {
+            "min_id": args.min_id,
+            "max_id": args.max_id,
+            "batch_size": args.batch_size,
+            "reset_tables": not args.no_reset,
+        }
 
-        # Insert keywords from config
-        insert_keywords_from_config(connection, config, logger)
+        logger.info(
+            "Analysis parameters: %s",
+            ", ".join(f"{k}={v}" for k, v in analyzer_options.items() if v is not None),
+        )
 
-        # Process advertisements
-        process_advertisements(connection, logger)
+        # Run the analysis process with options
+        ad_count = analyzer.run_analysis(**analyzer_options)
 
-        connection.close()
-        logger.info("Analysis completed successfully.")
+        logger.info(
+            "Analysis completed successfully. Processed %d advertisements.", ad_count
+        )
 
+    except ImportError as e:
+        logger.error("Failed to import analyzer module: %s", e)
     except FileNotFoundError:
         logger.error("Config file '%s' not found.", args.config)
     except yaml.YAMLError:
@@ -260,31 +269,24 @@ def insert_keywords_from_config(
     return count
 
 
-def process_advertisements(
-    connection: sqlite3.Connection, logger: logging.Logger
+def process_advertisements_with_factory(
+    connection: sqlite3.Connection, db_path: str, logger: logging.Logger
 ) -> int:
     """
-    Process all advertisements in the database to match with keywords.
+    Process all advertisements using AdFactory to match with keywords.
 
     Args:
         connection: SQLite database connection
+        db_path: Path to the SQLite database file
         logger: Logger instance
 
     Returns:
         Number of advertisements processed
     """
-    cursor = connection.cursor()
+    from advert import AdFactory
 
-    # Get all advertisements
-    logger.info("Fetching advertisements from database")
-    cursor.execute("SELECT id, html_body FROM advertisements")
-    ads = cursor.fetchall()
-
-    if not ads:
-        logger.warning("No advertisements found in database")
-        return 0
-
-    logger.info("Processing %d advertisements for keyword matches", len(ads))
+    batch_size = 100
+    processed_count = 0
 
     # Fetch keywords using static method
     regexes = Harvester.fetch_keywords(connection)
@@ -292,75 +294,29 @@ def process_advertisements(
         logger.warning("No keywords found for matching")
         return 0
 
-    logger.debug("Using %d keywords for matching", len(regexes))
+    logger.info("Using %d keywords for matching", len(regexes))
+
+    # Use the new AdFactory fetch_by_condition method to get advertisements in batches
+    advertisements_iterator = AdFactory.fetch_by_condition(
+        db_path=db_path, batch_size=batch_size
+    )
 
     # Process each advertisement
-    return match_advertisements_with_keywords(connection, ads, regexes, logger)
+    for ad in advertisements_iterator:
+        # Match keywords for this advertisement
+        matched_keyword_ids = match_keywords_for_ad(ad, regexes, logger)
 
-
-def match_advertisements_with_keywords(
-    connection: sqlite3.Connection,
-    ads: List[Tuple[int, str]],
-    regexes: Dict[int, re.Pattern],
-    logger: logging.Logger,
-) -> int:
-    """
-    Match advertisements with keywords and update the keyword_advertisement table.
-
-    Args:
-        connection: SQLite database connection
-        ads: List of tuples containing (ad_id, html_body)
-        regexes: Dictionary of compiled regex patterns for keywords
-        logger: Logger instance
-
-    Returns:
-        Number of advertisement-keyword matches created
-    """
-    cursor = connection.cursor()
-    total_matches = 0
-    processed_count = 0
-    batch_size = 100
-
-    for ad_id, html_body in ads:
-        # Create a temporary Advertisement instance to use matching logic
-        from advert import Advertisement
-
-        ad = Advertisement(source=html_body)
-
-        # Match keywords
-        matched_keywords = match_keywords_for_ad(ad, regexes, logger)
-
-        # Insert matches into database
-        for keyword_id in matched_keywords:
-            try:
-                cursor.execute(
-                    "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
-                    (keyword_id, ad_id),
-                )
-                total_matches += 1
-            except sqlite3.Error as e:
-                logger.warning(
-                    "Error linking ad %d with keyword %d: %s", ad_id, keyword_id, e
-                )
+        # Update keyword matches in the database
+        update_advertisement_keywords(connection, ad.id, matched_keyword_ids, logger)
 
         processed_count += 1
-
-        # Commit in batches to avoid large transactions
-        if processed_count % batch_size == 0:
-            connection.commit()
-            logger.debug(
-                "Processed %d advertisements (%d matches so far)",
-                processed_count,
-                total_matches,
-            )
+        if processed_count % 100 == 0:
+            logger.info("Processed %d advertisements", processed_count)
+            connection.commit()  # Commit periodically
 
     # Final commit
     connection.commit()
-    logger.info(
-        "Created %d keyword matches for %d advertisements",
-        total_matches,
-        processed_count,
-    )
+    logger.info("Processed %d advertisements", processed_count)
 
     return processed_count
 
@@ -379,7 +335,7 @@ def match_keywords_for_ad(
     Returns:
         List of keyword IDs that match the advertisement
     """
-    # Extract the HTML content from the advertisement
+    # Extract text content from the advertisement
     matched_keywords = []
     description = ad.get_description()
 
@@ -393,6 +349,51 @@ def match_keywords_for_ad(
             matched_keywords.append(keyword_id)
 
     return matched_keywords
+
+
+def update_advertisement_keywords(
+    connection: sqlite3.Connection,
+    ad_id: int,
+    keyword_ids: List[int],
+    logger: logging.Logger,
+) -> None:
+    """
+    Update the keyword associations for an advertisement.
+
+    Args:
+        connection: SQLite database connection
+        ad_id: ID of the advertisement
+        keyword_ids: List of keyword IDs that match the advertisement
+        logger: Logger instance
+    """
+    if ad_id is None:
+        logger.warning("Cannot update keywords for advertisement with None ID")
+        return
+
+    cursor = connection.cursor()
+
+    try:
+        # First delete any existing keyword associations for this ad
+        cursor.execute(
+            "DELETE FROM keyword_advertisement WHERE advertisement_id = ?", (ad_id,)
+        )
+
+        # Insert new keyword associations
+        for keyword_id in keyword_ids:
+            cursor.execute(
+                "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+                (keyword_id, ad_id),
+            )
+
+        logger.debug(
+            "Updated advertisement ID %d with %d keyword associations",
+            ad_id,
+            len(keyword_ids),
+        )
+
+    except sqlite3.Error as e:
+        logger.error("Error updating keywords for ad %d: %s", ad_id, e)
+        raise
 
 
 def main() -> None:
@@ -520,6 +521,31 @@ def main() -> None:
     )
     analyze_parser.add_argument(
         "-c", "--config", required=True, type=str, help="Path to the config file"
+    )
+    analyze_parser.add_argument(
+        "--min-id",
+        required=False,
+        type=int,
+        help="Minimum advertisement ID to analyze",
+    )
+    analyze_parser.add_argument(
+        "--max-id",
+        required=False,
+        type=int,
+        help="Maximum advertisement ID to analyze",
+    )
+    analyze_parser.add_argument(
+        "-b",
+        "--batch-size",
+        required=False,
+        type=int,
+        default=100,
+        help="Number of advertisements to process in each batch",
+    )
+    analyze_parser.add_argument(
+        "--no-reset",
+        action="store_true",
+        help="Don't reset keyword tables before analysis (use for incremental updates)",
     )
 
     # Parse arguments

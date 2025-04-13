@@ -1,9 +1,12 @@
+import sqlite3
 from bs4 import BeautifulSoup
-from typing import Dict, Any, Optional, List, Type, Union, TypeVar
+from typing import Dict, Any, Optional, List, Type, Union, TypeVar, Iterator
 
 
 class Advertisement:
     """Base class for job advertisements."""
+
+    id: Optional[int] = None
 
     def __init__(
         self, source: str, link: Optional[str] = None, status: Optional[int] = None
@@ -66,6 +69,92 @@ class Advertisement:
             Posting date or None if not found
         """
         return None
+
+    def save(self, db_path: str) -> int:
+        """
+        Save the advertisement to the database. Updates if ID exists, otherwise inserts.
+
+        This method connects to the database specified by db_path and either:
+        - Updates an existing row if self.id is set and exists in the database
+        - Inserts a new row if self.id is None or not found in the database
+
+        Args:
+            db_path: Path to the SQLite database file
+
+        Returns:
+            The ID of the saved advertisement
+
+        Raises:
+            sqlite3.Error: If a database error occurs during save operation
+        """
+        import sqlite3
+
+        connection = sqlite3.connect(db_path)
+        cursor = connection.cursor()
+
+        try:
+            # Get data from advertisement
+            ad_data = self.to_dict()
+            ad_type = self.__class__.__name__
+
+            if self.id is not None:
+                # Check if record exists with this ID
+                cursor.execute("SELECT id FROM advertisements WHERE id = ?", (self.id,))
+
+                if cursor.fetchone():
+                    # Update existing record
+                    cursor.execute(
+                        """
+                        UPDATE advertisements 
+                        SET title = ?, company = ?, location = ?, description = ?,
+                            html_body = ?, http_status = ?, url = ?, ad_type = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            ad_data["title"],
+                            ad_data["company"],
+                            ad_data["location"],
+                            ad_data["description"],
+                            self.source,
+                            self.status,
+                            self.link,
+                            ad_type,
+                            self.id,
+                        ),
+                    )
+                    connection.commit()
+                    return self.id
+
+            # If no ID or ID not found, insert new record
+            cursor.execute(
+                """
+                INSERT INTO advertisements 
+                (title, company, location, description, html_body, http_status, url, ad_type, filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ad_data["title"],
+                    ad_data["company"],
+                    ad_data["location"],
+                    ad_data["description"],
+                    self.source,
+                    self.status,
+                    self.link,
+                    ad_type,
+                    None,  # Default filename to None initially
+                ),
+            )
+
+            # Get the ID of the newly inserted record
+            self.id = cursor.lastrowid
+            connection.commit()
+            return self.id
+
+        except sqlite3.Error as e:
+            connection.rollback()
+            raise e
+        finally:
+            connection.close()
 
     def debug(self) -> None:
         """Print advertisement information for debugging purposes."""
@@ -244,6 +333,7 @@ class AdFactory:
         source: str,
         link: Optional[str] = None,
         status: Optional[int] = None,
+        id: Optional[int] = None,
     ) -> Advertisement:
         """
         Create an advertisement instance of the specified type.
@@ -253,6 +343,7 @@ class AdFactory:
             source: HTML content of the advertisement
             link: URL of the advertisement
             status: HTTP status code of the response
+            id: Database ID of the advertisement (optional)
 
         Returns:
             Advertisement instance
@@ -262,7 +353,13 @@ class AdFactory:
         """
         if ad_type not in cls._registry:
             raise ValueError(f"Unknown advertisement type: {ad_type}")
-        return cls._registry[ad_type](source=source, link=link, status=status)
+        ad = cls._registry[ad_type](source=source, link=link, status=status)
+
+        # Set the ID if provided
+        if id is not None:
+            ad.id = id
+
+        return ad
 
     @classmethod
     def get_registered_types(cls) -> List[str]:
@@ -273,6 +370,106 @@ class AdFactory:
             List of registered advertisement types
         """
         return list(cls._registry.keys())
+
+    @classmethod
+    def fetch_by_condition(
+        cls,
+        db_path: Optional[str] = None,
+        condition: str = "",
+        params: Optional[List[Any]] = None,
+        batch_size: int = 100,
+        connection: Optional[sqlite3.Connection] = None,
+    ) -> Iterator[Advertisement]:
+        """
+        Fetch advertisements from the database using SQL condition and return as an iterator.
+
+        This method efficiently retrieves advertisements in batches to minimize memory usage.
+        Either db_path or connection must be provided, but not both.
+
+        Args:
+            db_path: Path to the SQLite database file (mutually exclusive with connection)
+            condition: SQL WHERE clause condition (without the "WHERE" keyword)
+            params: Parameters for the SQL query placeholders
+            batch_size: Number of records to fetch in each batch
+            connection: Optional existing SQLite connection (mutually exclusive with db_path)
+
+        Returns:
+            Iterator of Advertisement objects
+
+        Raises:
+            ValueError: If both db_path and connection are provided or if neither is provided
+            sqlite3.Error: If a database error occurs during fetch operation
+        """
+        import sqlite3
+        import logging
+
+        logger = logging.getLogger(f"{__name__}.AdFactory.fetch_by_condition")
+
+        # Validate arguments
+        if db_path is not None and connection is not None:
+            error_msg = (
+                "Both db_path and connection were provided. Please provide only one."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        if db_path is None and connection is None:
+            error_msg = (
+                "Neither db_path nor connection was provided. Please provide one."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Determine if we should close the connection when done
+        should_close_connection = db_path is not None
+
+        # Use provided connection or create a new one from db_path
+        if connection is None:
+            connection = sqlite3.connect(db_path)
+
+        cursor = connection.cursor()
+
+        # Build query with optional condition
+        query = "SELECT id, ad_type, html_body, url, http_status FROM advertisements"
+        if condition:
+            query += f" WHERE {condition}"
+
+        # Default to empty list if params is None
+        params = params or []
+
+        try:
+            cursor.execute(query, params)
+            logger.debug(f"Executing query: {query} with params: {params}")
+
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+
+                logger.debug(f"Fetched batch of {len(rows)} advertisements")
+
+                for row in rows:
+                    ad_id, ad_type, html_body, url, status = row
+
+                    # Create advertisement instance using the factory
+                    yield cls.create(
+                        ad_type=ad_type,
+                        source=html_body,
+                        link=url,
+                        status=status,
+                        id=ad_id,
+                    )
+
+        except sqlite3.Error as e:
+            logger.error(f"Database error while fetching advertisements: {e}")
+            # Only close the connection if we created it and an error occurred
+            if should_close_connection:
+                connection.close()
+            raise
+        finally:
+            # Only close the connection if we created it
+            if should_close_connection and connection is not None:
+                connection.close()
 
 
 # Register advertisement classes

@@ -351,7 +351,8 @@ class Harvester:
 
         # Build the query with optional ID filters
         query = """
-            SELECT a.id, a.ad_type, a.html_body, a.url, a.created_at, a.filename
+            SELECT a.id, a.title, a.company, a.location, a.ad_type, a.html_body, 
+                   a.url, a.created_at, a.filename
             FROM advertisements a
             WHERE EXISTS (
                 SELECT 1 FROM keyword_advertisement ka
@@ -384,13 +385,28 @@ class Harvester:
         result = []
         for data in dataset:
             ad_id = data[0]
-            ad = AdFactory.create(data[1], data[2], data[3])
-            title = ad.get_title() or ""
-            company = ad.get_company() or ""
-            location = ad.get_location() or ""
-            created_at = data[4] or ""
-            url = data[3] or ""
-            filename = data[5] or ""
+            title = data[1] or ""
+            company = data[2] or ""
+            location = data[3] or ""
+            ad_type = data[4]
+            html_body = data[5]
+            url = data[6] or ""
+            created_at = data[7] or ""
+            filename = data[8] or ""
+
+            # Create Advertisement instance to use get_* methods only if fields are missing
+            if not title or not company or not location:
+                ad = AdFactory.create(ad_type, html_body, url)
+                title = title or ad.get_title() or ""
+                company = company or ad.get_company() or ""
+                location = location or ad.get_location() or ""
+                logger.debug(
+                    "Extracted missing fields for ad %d: title=%s, company=%s, location=%s",
+                    ad_id,
+                    title[:20] + "..." if len(title) > 20 else title,
+                    company[:20] + "..." if len(company) > 20 else company,
+                    location[:20] + "..." if len(location) > 20 else location,
+                )
 
             # Get related keywords
             cursor.execute(

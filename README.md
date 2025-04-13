@@ -127,12 +127,14 @@ This file defines the job portals to harvest and keywords to search for:
 ```yaml
 # Example configuration
 portals:
-  - engine: StepStoneHarvester
-    url: https://www.stepstone.at
-    requests_per_minute: 10
-  - engine: KarriereHarvester
-    url: https://www.karriere.at
-    requests_per_minute: 15
+  - name: "karriere_at"
+    url: "https://www.karriere.at/"
+    engine: KarriereHarvester
+    requests_per_minute: 30
+  - name: "stepstone_at"
+    url: "https://www.stepstone.at/"
+    requests_per_minute: 2
+    engine: StepStoneHarvester
 
 keywords:
   - title: Python Developer
@@ -146,7 +148,7 @@ keywords:
     case_sensitive: false
 ```
 
-### Export Filter Configuration (export_filters.yml)
+### Export Filter Configuration
 
 This file defines filters used to organize exported HTML files into a nested directory structure:
 
@@ -185,37 +187,72 @@ filters:
 
 ## Usage
 
-The crawler has three main commands:
+The crawler has four main commands:
 
 ### 1. Harvesting Job Advertisements
 
 Harvest job advertisements from configured portals:
 
 ```bash
-python src/crawler.py harvest -d advertisements.db
+python src/crawler.py harvest -c etc/config.yml -d crawler.db
 ```
 
 This command will fetch job advertisements from the portals defined in `config.yml` and store them in the SQLite database.
 
-### 2. Analyzing Job Advertisements
+### 2. Assembling CSV Export
 
-Analyze the harvested job advertisements for keyword matches:
-
-```bash
-python src/crawler.py -l INFO assembly -c etc/config.yml -d advertisements.db -o advertisements.csv
-```
-
-This command will process the stored job advertisements and identify matches based on the keywords defined in `config.yml`.
-
-### 3. Exporting Results
-
-Export the analyzed results to the desired format:
+Generate a CSV file from the harvested advertisements:
 
 ```bash
-python src/crawler.py =l INFO export -c etc/config.yml -d advertisements.db -o output_dir
+python src/crawler.py assembly -d crawler.db -o results.csv --min-id 1 --max-id 1000
 ```
 
-This command will organize the exported HTML files into a nested directory structure based on the filters defined in `export_filters.yml`.
+Options:
+- `-d, --database`: Path to the database file (default: crawler.db in current directory)
+- `-o, --output`: Path to output CSV file
+- `--min-id`: Minimum advertisement ID to include
+- `--max-id`: Maximum advertisement ID to include
+
+### 3. Exporting HTML Files
+
+Export the HTML content of advertisements into a structured directory hierarchy:
+
+```bash
+python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --min-id 1 --max-id 1000
+```
+
+Options:
+- `-d, --database`: Path to the database file
+- `-c, --config`: Path to the filter configuration file
+- `-o, --output-dir`: Output directory for exported HTML files
+- `--min-id`: Minimum advertisement ID to include
+- `--max-id`: Maximum advertisement ID to include
+
+### 4. Analyzing Advertisements
+
+Analyze advertisements to match them with keywords:
+
+```bash
+python src/crawler.py analyze -d crawler.db -c etc/config.yml --min-id 1 --max-id 1000 -b 200 --no-reset
+```
+
+Options:
+- `-d, --database`: Path to the database file
+- `-c, --config`: Path to the configuration file
+- `--min-id`: Minimum advertisement ID to analyze
+- `--max-id`: Maximum advertisement ID to analyze
+- `-b, --batch-size`: Number of advertisements to process in each batch (default: 100)
+- `--no-reset`: Don't reset keyword tables before analysis (for incremental updates)
+
+### Global Options
+
+These options are available for all commands:
+
+```bash
+python src/crawler.py -l DEBUG [command] [options]
+```
+
+- `-l, --loglevel`: Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
 ## Contributing
 

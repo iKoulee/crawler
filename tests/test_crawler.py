@@ -228,7 +228,7 @@ class TestDatabaseOperations(unittest.TestCase):
                 "Test Company",
                 "Test Location",
                 "http://example.com",
-                "<html></html>",
+                "<html><body><h1>Test Job</h1><p>Test Company</p></body></html>",
                 200,
                 "KarriereAdvertisement",
                 "test_file.html",
@@ -251,22 +251,33 @@ class TestDatabaseOperations(unittest.TestCase):
 
         self.connection.commit()
 
-        # Test CSV export
-        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as temp_csv:
-            csv_path = temp_csv.name
+        # Create a mock for AdFactory.create to return our test data
+        with patch("advert.AdFactory.create") as mock_factory_create:
+            # Create a mock advertisement that returns our test values
+            mock_ad = MagicMock()
+            mock_ad.get_title.return_value = "Test Job"
+            mock_ad.get_company.return_value = "Test Company"
+            mock_ad.get_location.return_value = "Test Location"
+            mock_factory_create.return_value = mock_ad
 
-        try:
-            record_count = Harvester.export_to_csv(self.connection, csv_path)
-            self.assertEqual(record_count, 1)
+            # Test CSV export
+            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as temp_csv:
+                csv_path = temp_csv.name
 
-            # Check CSV content
-            with open(csv_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                self.assertIn("Test Job", content)
-                self.assertIn("Test Company", content)
-                self.assertIn("test_file.html", content)  # New filename field
-        finally:
-            os.unlink(csv_path)
+            try:
+                record_count = Harvester.export_to_csv(self.connection, csv_path)
+                self.assertEqual(record_count, 1)
+
+                # Check CSV content
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    self.assertIn("Test Job", content)
+                    self.assertIn("Test Company", content)
+                    self.assertIn("Test Location", content)
+                    self.assertIn("test_file.html", content)  # New filename field
+                    self.assertIn("Python", content)  # Check related keywords
+            finally:
+                os.unlink(csv_path)
 
 
 if __name__ == "__main__":
