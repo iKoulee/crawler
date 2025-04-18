@@ -2,12 +2,12 @@ portals:
   - name: "karriere_at"
     url: "https://www.karriere.at/"
     engine: KarriereHarvester
-    requests_per_minute: 30
+    requests_per_minute: 12
     retry_timeout: 5  # Wait 5 minutes before retrying after a server error
   - name: "stepstone_at"
     url: "https://www.stepstone.at/"
     requests_per_minute: 2
-    retry_timeout: 10  # Wait 10 minutes before retrying after a server error
+    retry_timeout: 15  # Wait 10 minutes before retrying after a server error
     engine: StepStoneHarvester
   - name: "stepstone_de"
     url: "https://www.stepstone.de/"
