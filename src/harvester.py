@@ -1094,33 +1094,75 @@ class KarriereHarvester(Harvester):
             )
 
     def get_next_link(self) -> Iterator[str]:
+        """
+        Fetch and yield links from the job sitemaps.
+
+        Yields:
+            URLs of job advertisements from the sitemaps
+        """
         self.logger.info("Fetching sitemap links from robots.txt")
         sitemap_count = 0
         link_count = 0
 
-        for sitemap_link in self._get_robot_parser().sitemaps:
-            if re.match(r".*sitemap-jobs.*", sitemap_link):
-                sitemap_count += 1
-                self.logger.info("Processing jobs sitemap: %s", sitemap_link)
+        # Get sitemaps from robots.txt
+        sitemaps = self._get_robot_parser().sitemaps
+        if not sitemaps:
+            self.logger.warning("No sitemaps found in robots.txt")
+            return
 
-                response = self._get(sitemap_link, headers=self._headers)
-                response.raise_for_status()
-                response.encoding = response.apparent_encoding
-                sitemap = ET.fromstring(response.text)
+        for sitemap_link in sitemaps:
+            # Check if sitemap_link is None
+            if sitemap_link is None:
+                self.logger.warning("Found None sitemap link in robots.txt, skipping")
+                continue
 
-                sitemap_link_count = 0
-                for link in sitemap.findall(
-                    ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
-                ):
-                    sitemap_link_count += 1
-                    link_count += 1
-                    yield link.text
+            # Check if it's a job sitemap
+            try:
+                if re.match(r".*sitemap-jobs.*", sitemap_link):
+                    sitemap_count += 1
+                    self.logger.info("Processing jobs sitemap: %s", sitemap_link)
 
-                self.logger.info(
-                    "Extracted %d links from sitemap %s",
-                    sitemap_link_count,
-                    sitemap_link,
+                    try:
+                        response = self._get(sitemap_link, headers=self._headers)
+                        response.raise_for_status()
+                        response.encoding = response.apparent_encoding
+                        sitemap = ET.fromstring(response.text)
+
+                        sitemap_link_count = 0
+                        for link in sitemap.findall(
+                            ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+                        ):
+                            # Check if link.text is None
+                            if link.text is None:
+                                self.logger.warning(
+                                    "Found None link in sitemap, skipping"
+                                )
+                                continue
+
+                            sitemap_link_count += 1
+                            link_count += 1
+                            yield link.text
+
+                        self.logger.info(
+                            "Extracted %d links from sitemap %s",
+                            sitemap_link_count,
+                            sitemap_link,
+                        )
+                    except requests.RequestException as e:
+                        self.logger.error(
+                            "Error fetching sitemap %s: %s", sitemap_link, e
+                        )
+                        continue
+                    except ET.ParseError as e:
+                        self.logger.error(
+                            "Error parsing sitemap %s: %s", sitemap_link, e
+                        )
+                        continue
+            except TypeError as e:
+                self.logger.error(
+                    "Error matching sitemap link pattern: %s. Link: %s", e, sitemap_link
                 )
+                continue
 
         self.logger.info(
             "Processed %d job sitemaps, found %d total links", sitemap_count, link_count
