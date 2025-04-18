@@ -55,22 +55,80 @@ def harvest_command(args: argparse.Namespace, logger: logging.Logger) -> None:
         harvester_factory = HarvesterFactory(config)
         logger.debug("Initialized harvester factory")
 
+        # Dictionary to track which harvester belongs to which portal
+        harvester_info: Dict[int, Dict[str, str]] = {}
         threads: List[threading.Thread] = []
+        thread_id = 0
+
+        # Create and start threads for each harvester
         for harvester in harvester_factory.get_next_harvester():
-            thread = threading.Thread(target=harvester.harvest, args=(args.database,))
+            # Store information about this harvester
+            portal_name = next(
+                (
+                    p.get("name", "unknown")
+                    for p in config["portals"]
+                    if p.get("engine") == harvester.__class__.__name__
+                ),
+                harvester.__class__.__name__,
+            )
+            harvester_info[thread_id] = {
+                "class": harvester.__class__.__name__,
+                "portal": portal_name,
+                "url": harvester.url,
+            }
+
+            # Create a wrapper function to track completion
+            def harvester_wrapper(
+                harvester_id: int, harvester: Harvester, db_path: str
+            ) -> None:
+                h_info = harvester_info[harvester_id]
+                try:
+                    logger.info(
+                        "Starting harvester %s for portal '%s' (%s)",
+                        h_info["class"],
+                        h_info["portal"],
+                        h_info["url"],
+                    )
+                    harvester.harvest(db_path)
+                    logger.info(
+                        "✅ Completed harvester %s for portal '%s' (%s)",
+                        h_info["class"],
+                        h_info["portal"],
+                        h_info["url"],
+                    )
+                except Exception as e:
+                    logger.error(
+                        "❌ Error in harvester %s for portal '%s' (%s): %s",
+                        h_info["class"],
+                        h_info["portal"],
+                        h_info["url"],
+                        str(e),
+                    )
+
+            # Start thread with the wrapper
+            thread = threading.Thread(
+                target=harvester_wrapper, args=(thread_id, harvester, args.database)
+            )
             threads.append(thread)
             thread.start()
             logger.debug(
-                "Started harvester thread for %s", harvester.__class__.__name__
+                "Started harvester thread #%d for %s on portal '%s'",
+                thread_id,
+                harvester.__class__.__name__,
+                portal_name,
             )
+            thread_id += 1
 
-        for thread in threads:
+        # Wait for all threads to complete
+        for i, thread in enumerate(threads):
             thread.join()
-            logger.debug("Thread completed")
+            logger.debug("Thread #%d completed", i)
 
         connection.commit()
         connection.close()
-        logger.info("Finished harvesting.")
+        logger.info(
+            "All harvesting threads finished. Harvesting completed successfully."
+        )
 
     except FileNotFoundError:
         logger.error("Config file '%s' not found.", args.config)
