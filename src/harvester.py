@@ -236,7 +236,7 @@ class Harvester:
                 (advert.link,),
             )
             if cursor.fetchone():
-                self.logger.info(
+                self.logger.debug(
                     "Advertisement %s already exists in the database.", advert.link
                 )
                 continue
@@ -967,7 +967,7 @@ class StepStoneHarvester(Harvester):
         """
         for link in self.get_next_link():
             if self.advertisement_exists(db_file_name, link):
-                self.logger.info(
+                self.logger.debug(
                     "Advertisement %s already exists in the database.", link
                 )
                 continue
@@ -1052,7 +1052,7 @@ class KarriereHarvester(Harvester):
         """
         for link in self.get_next_link():
             if self.advertisement_exists(db_file_name, link):
-                self.logger.info(
+                self.logger.debug(
                     "Advertisement %s already exists in the database.", link
                 )
                 continue
