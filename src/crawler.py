@@ -142,6 +142,7 @@ def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
             args.config,
             min_id=args.min_id,
             max_id=args.max_id,
+            create_csv_files=args.create_csv_files,
         )
 
         logger.info("Exported %d advertisements", total_exported)
@@ -396,6 +397,172 @@ def update_advertisement_keywords(
         raise
 
 
+def update_command(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """
+    Execute the update command to fill missing advertisement information.
+
+    This command processes advertisements and updates any missing fields
+    by re-parsing the HTML content. When the --force flag is used, it will
+    override existing data even if not empty.
+
+    Args:
+        args: Command line arguments
+        logger: Logger instance
+    """
+    try:
+        connection = sqlite3.connect(args.database)
+        cursor = connection.cursor()
+
+        # Build the query to select advertisements that need updating
+        # If force is not enabled, only select ads with missing fields
+        query = """
+            SELECT id, ad_type, html_body, url, http_status, title, company, location, description
+            FROM advertisements
+        """
+
+        conditions = []
+        params = []
+
+        # Add ID range filters if provided
+        if args.min_id is not None:
+            conditions.append("id >= ?")
+            params.append(args.min_id)
+
+        if args.max_id is not None:
+            conditions.append("id <= ?")
+            params.append(args.max_id)
+
+        # If not forcing updates, only select rows with missing data
+        if not args.force:
+            conditions.append(
+                "(title IS NULL OR company IS NULL OR location IS NULL OR description IS NULL)"
+            )
+
+        # Add conditions to query if present
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        # Add order and limit
+        query += " ORDER BY id ASC"
+
+        logger.info("Starting update of advertisements")
+        if args.force:
+            logger.info(
+                "Force mode enabled: updating all fields regardless of current content"
+            )
+
+        # Execute query and get count of ads to process
+        cursor.execute(f"SELECT COUNT(*) FROM ({query})", params)
+        total_count = cursor.fetchone()[0]
+        logger.info(f"Found {total_count} advertisements to process")
+
+        if total_count == 0:
+            logger.info("No advertisements need updating. Exiting.")
+            connection.close()
+            return
+
+        # Process advertisements in batches
+        cursor.execute(query, params)
+        processed_count = 0
+        updated_count = 0
+        batch_size = args.batch_size
+
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+
+            for row in rows:
+                (
+                    ad_id,
+                    ad_type,
+                    html_body,
+                    url,
+                    status,
+                    current_title,
+                    current_company,
+                    current_location,
+                    current_description,
+                ) = row
+
+                try:
+                    # Create Advertisement instance to re-parse HTML
+                    ad = AdFactory.create(
+                        ad_type=ad_type,
+                        source=html_body,
+                        link=url,
+                        status=status,
+                        id=ad_id,
+                    )
+
+                    # Extract data from the advertisement
+                    title = ad.get_title()
+                    company = ad.get_company()
+                    location = ad.get_location()
+                    description = ad.get_description()
+
+                    # Determine what fields need updating
+                    update_fields = []
+                    update_values = []
+
+                    # For each field, update if:
+                    # 1. Force mode is enabled, OR
+                    # 2. The current value is None/empty AND the new value is not None
+
+                    if (args.force or not current_title) and title:
+                        update_fields.append("title = ?")
+                        update_values.append(title)
+
+                    if (args.force or not current_company) and company:
+                        update_fields.append("company = ?")
+                        update_values.append(company)
+
+                    if (args.force or not current_location) and location:
+                        update_fields.append("location = ?")
+                        update_values.append(location)
+
+                    if (args.force or not current_description) and description:
+                        update_fields.append("description = ?")
+                        update_values.append(description)
+
+                    # Perform update if there are fields to update
+                    if update_fields:
+                        update_query = f"UPDATE advertisements SET {', '.join(update_fields)} WHERE id = ?"
+                        update_values.append(ad_id)
+
+                        update_cursor = connection.cursor()
+                        update_cursor.execute(update_query, update_values)
+
+                        updated_count += 1
+                        logger.debug(
+                            f"Updated advertisement ID {ad_id} with {len(update_fields)} fields"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error processing advertisement ID {ad_id}: {str(e)}")
+
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    # Commit every 100 records
+                    connection.commit()
+                    logger.info(
+                        f"Progress: {processed_count}/{total_count} advertisements processed, {updated_count} updated"
+                    )
+
+        # Final commit and cleanup
+        connection.commit()
+        connection.close()
+
+        logger.info(
+            f"Update completed: {processed_count} advertisements processed, {updated_count} updated"
+        )
+
+    except sqlite3.Error as e:
+        logger.error(f"Database error: {str(e)}")
+    except Exception as e:
+        logger.exception(f"Unexpected error: {str(e)}")
+
+
 def main() -> None:
     """
     Main function that parses command line arguments and dispatches to subcommands.
@@ -506,6 +673,11 @@ def main() -> None:
         type=int,
         help="Maximum advertisement ID to include",
     )
+    export_parser.add_argument(
+        "--create-csv-files",
+        action="store_true",
+        help="Create CSV files for exported advertisements",
+    )
 
     # Create the parser for the "analyze" command
     analyze_parser = subparsers.add_parser(
@@ -548,6 +720,44 @@ def main() -> None:
         help="Don't reset keyword tables before analysis (use for incremental updates)",
     )
 
+    # Create the parser for the "update" command
+    update_parser = subparsers.add_parser(
+        "update", help="Update missing information in advertisements"
+    )
+    update_parser.add_argument(
+        "-d",
+        "--database",
+        required=False,
+        type=str,
+        default=os.path.join(os.getcwd(), "crawler.db"),
+        help="Path to the database file",
+    )
+    update_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Override existing data even if not empty",
+    )
+    update_parser.add_argument(
+        "--min-id",
+        required=False,
+        type=int,
+        help="Minimum advertisement ID to update",
+    )
+    update_parser.add_argument(
+        "--max-id",
+        required=False,
+        type=int,
+        help="Maximum advertisement ID to update",
+    )
+    update_parser.add_argument(
+        "-b",
+        "--batch-size",
+        required=False,
+        type=int,
+        default=100,
+        help="Number of advertisements to process in each batch",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -564,9 +774,11 @@ def main() -> None:
         export_command(args, logger)
     elif args.command == "analyze":
         analyze_command(args, logger)
+    elif args.command == "update":
+        update_command(args, logger)
     else:
         logger.error(
-            "No command specified. Use 'harvest', 'assembly', 'export', or 'analyze'."
+            "No command specified. Use 'harvest', 'assembly', 'export', 'analyze', or 'update'."
         )
         parser.print_help()
 

@@ -584,6 +584,7 @@ class Harvester:
         config_path: str,
         min_id: Optional[int] = None,
         max_id: Optional[int] = None,
+        create_csv_files: bool = False,
     ) -> Tuple[int, Dict[str, int]]:
         """
         Export advertisement HTML bodies to files with nested directory structure.
@@ -598,6 +599,7 @@ class Harvester:
             config_path: Path to the configuration file with filter definitions
             min_id: Minimum advertisement ID to export (inclusive)
             max_id: Maximum advertisement ID to export (inclusive)
+            create_csv_files: Whether to create CSV files in each directory
 
         Returns:
             Tuple containing (total_exported, category_counts)
@@ -629,7 +631,7 @@ class Harvester:
         # Retrieve advertisements from database
         cursor = connection.cursor()
         query = """
-            SELECT a.id, a.html_body, a.url, a.ad_type 
+            SELECT a.id, a.html_body, a.url, a.ad_type, a.title, a.company, a.location, a.created_at 
             FROM advertisements a
             WHERE EXISTS (SELECT 1 FROM keyword_advertisement ka WHERE ka.advertisement_id = a.id)
         """
@@ -651,13 +653,19 @@ class Harvester:
         category_counts = {category: 0 for category in compiled_filters.keys()}
         batch_size = 100
 
+        # Dictionary to store CSV data for each directory
+        # Key: directory path, Value: list of ad data dictionaries
+        directory_csv_data = {} if create_csv_files else None
+
         while True:
             rows = cursor.fetchmany(batch_size)
             if not rows:
                 break
 
             for row in rows:
-                ad_id, html_body, url, ad_type = row
+                ad_id, html_body, url, ad_type, title, company, location, created_at = (
+                    row
+                )
 
                 # Determine portal name from ad_type or URL
                 portal_name = Harvester._extract_portal_name(ad_type, url)
@@ -698,6 +706,49 @@ class Harvester:
                         (rel_file_path, ad_id),
                     )
 
+                    # If CSV files are requested, collect data for each directory
+                    if create_csv_files:
+                        # Get keywords for this advertisement
+                        keywords_cursor = connection.cursor()
+                        keywords_cursor.execute(
+                            """
+                            SELECT k.title
+                            FROM keywords k
+                            JOIN keyword_advertisement ka ON k.id = ka.keyword_id
+                            WHERE ka.advertisement_id = ?
+                            """,
+                            (ad_id,),
+                        )
+                        keywords = [row[0] for row in keywords_cursor.fetchall()]
+
+                        # Create ad data dictionary
+                        ad_data = {
+                            "job_title": title or "",
+                            "company_name": company or "",
+                            "location": location or "",
+                            "harvest_date": created_at or "",
+                            "url": url or "",
+                            "portal": urlparse(url).netloc if url else "",
+                            "related_keywords": "; ".join(keywords),
+                            "filename": rel_file_path,
+                        }
+
+                        # Add data to all parent directories in the path
+                        current_dir = base_path
+                        # Add to root directory
+                        dir_path_str = str(current_dir)
+                        if dir_path_str not in directory_csv_data:
+                            directory_csv_data[dir_path_str] = []
+                        directory_csv_data[dir_path_str].append(ad_data)
+
+                        # Add to each subdirectory
+                        for part in rel_path_parts:
+                            current_dir = current_dir / part
+                            dir_path_str = str(current_dir)
+                            if dir_path_str not in directory_csv_data:
+                                directory_csv_data[dir_path_str] = []
+                            directory_csv_data[dir_path_str].append(ad_data)
+
                     total_exported += 1
                     if total_exported % 100 == 0:
                         logger.info("Exported %d advertisement files", total_exported)
@@ -709,6 +760,10 @@ class Harvester:
         # Final commit
         connection.commit()
 
+        # If CSV files are requested, create them in each directory
+        if create_csv_files and directory_csv_data:
+            Harvester._create_directory_csv_files(directory_csv_data, logger)
+
         logger.info(
             "Export completed. Exported %d advertisement files to %s",
             total_exported,
@@ -716,6 +771,49 @@ class Harvester:
         )
 
         return (total_exported, category_counts)
+
+    @staticmethod
+    def _create_directory_csv_files(
+        directory_csv_data: Dict[str, List[Dict[str, str]]],
+        logger: logging.Logger,
+    ) -> None:
+        """
+        Create CSV files in each directory containing information about advertisements.
+
+        Args:
+            directory_csv_data: Dictionary mapping directory paths to lists of ad data dictionaries
+            logger: Logger instance
+        """
+        fieldnames = [
+            "job_title",
+            "company_name",
+            "location",
+            "harvest_date",
+            "url",
+            "portal",
+            "related_keywords",
+            "filename",
+        ]
+
+        csv_count = 0
+        for dir_path, ads_data in directory_csv_data.items():
+            try:
+                csv_path = Path(dir_path) / "advertisements.csv"
+                with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for ad_data in ads_data:
+                        writer.writerow(ad_data)
+                csv_count += 1
+
+                if csv_count % 10 == 0:
+                    logger.debug("Created %d CSV files in directories", csv_count)
+            except IOError as e:
+                logger.error(
+                    "Failed to create CSV file in directory %s: %s", dir_path, e
+                )
+
+        logger.info("Created %d CSV files in directories", csv_count)
 
     @staticmethod
     def _extract_portal_name(ad_type: str, url: str) -> str:
@@ -887,6 +985,11 @@ class StepStoneHarvester(Harvester):
                 )  # Wait for retry_timeout minutes before retrying
                 response = self._get(link, headers=self._headers, cookies=self.cookies)
 
+            if response.status_code == 410:
+                self.logger.warning(
+                    "Advertisement %s is no longer available (410 Gone)", link
+                )
+                continue
             if response.status_code != 200:
                 self.logger.error(
                     "Failed to fetch %s: HTTP %d", link, response.status_code
@@ -966,6 +1069,12 @@ class KarriereHarvester(Harvester):
                     self.retry_timeout * 60
                 )  # Wait for retry_timeout minutes before retrying
                 response = self._get(link, headers=self._headers, cookies=self.cookies)
+
+            if response.status_code == 410:
+                self.logger.warning(
+                    "Advertisement %s is no longer available (410 Gone)", link
+                )
+                continue
 
             if response.status_code != 200:
                 self.logger.error(

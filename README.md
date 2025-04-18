@@ -187,7 +187,7 @@ filters:
 
 ## Usage
 
-The crawler has four main commands:
+The crawler has five main commands:
 
 ### 1. Harvesting Job Advertisements
 
@@ -218,7 +218,7 @@ Options:
 Export the HTML content of advertisements into a structured directory hierarchy:
 
 ```bash
-python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --min-id 1 --max-id 1000
+python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --min-id 1 --max-id 1000 --create-csv-files
 ```
 
 Options:
@@ -227,6 +227,7 @@ Options:
 - `-o, --output-dir`: Output directory for exported HTML files
 - `--min-id`: Minimum advertisement ID to include
 - `--max-id`: Maximum advertisement ID to include
+- `--create-csv-files`: Generate CSV summaries in each directory
 
 ### 4. Analyzing Advertisements
 
@@ -243,6 +244,21 @@ Options:
 - `--max-id`: Maximum advertisement ID to analyze
 - `-b, --batch-size`: Number of advertisements to process in each batch (default: 100)
 - `--no-reset`: Don't reset keyword tables before analysis (for incremental updates)
+
+### 5. Updating Advertisement Information
+
+Update missing fields in advertisements by re-parsing the HTML content:
+
+```bash
+python src/crawler.py update -d crawler.db --min-id 1 --max-id 1000 --force -b 200
+```
+
+Options:
+- `-d, --database`: Path to the database file
+- `--force`: Override existing data even if not empty
+- `--min-id`: Minimum advertisement ID to update
+- `--max-id`: Maximum advertisement ID to update
+- `-b, --batch-size`: Number of advertisements to process in each batch (default: 100)
 
 ### Global Options
 
