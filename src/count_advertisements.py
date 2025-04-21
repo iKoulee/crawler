@@ -38,7 +38,7 @@ def setup_logging(log_level: str) -> None:
     )
 
 
-def count_advertisements(config_path: str) -> Dict[str, int]:
+def count_advertisements(config_path: str) -> Dict[str, Dict[str, int]]:
     """
     Count the number of advertisements available on job portals.
 
@@ -46,7 +46,7 @@ def count_advertisements(config_path: str) -> Dict[str, int]:
         config_path: Path to the configuration file
 
     Returns:
-        Dictionary mapping portal names to advertisement counts
+        Dictionary mapping portal names to dictionaries of URL:count pairs
     """
     logger = logging.getLogger(__name__)
 
@@ -67,7 +67,12 @@ def count_advertisements(config_path: str) -> Dict[str, int]:
     counts = {}
     for harvester in harvester_factory.get_next_harvester():
         portal_name = harvester.__class__.__name__
-        logger.info("Counting advertisements for %s", portal_name)
+        portal_url = harvester.url
+
+        if portal_name not in counts:
+            counts[portal_name] = {}
+
+        logger.info("Counting advertisements for %s (%s)", portal_name, portal_url)
 
         # Count links from the sitemap
         link_count = 0
@@ -75,12 +80,21 @@ def count_advertisements(config_path: str) -> Dict[str, int]:
             for _ in harvester.get_next_link():
                 link_count += 1
                 if link_count % 1000 == 0:
-                    logger.info("Found %d links so far for %s", link_count, portal_name)
+                    logger.info(
+                        "Found %d links so far for %s (%s)",
+                        link_count,
+                        portal_name,
+                        portal_url,
+                    )
         except Exception as e:
-            logger.error("Error counting links for %s: %s", portal_name, e)
+            logger.error(
+                "Error counting links for %s (%s): %s", portal_name, portal_url, e
+            )
 
-        counts[portal_name] = link_count
-        logger.info("Found %d total links for %s", link_count, portal_name)
+        counts[portal_name][portal_url] = link_count
+        logger.info(
+            "Found %d total links for %s (%s)", link_count, portal_name, portal_url
+        )
 
     return counts
 
@@ -127,20 +141,27 @@ def main() -> None:
         print("\nAdvertisement counts by portal:")
         print("------------------------------")
         total_count = 0
-        for portal, count in counts.items():
-            print(f"{portal}: {count:,}")
-            total_count += count
+        for portal, urls in counts.items():
+            print(f"{portal}:")
+            portal_total = sum(urls.values())
+            for url, count in urls.items():
+                print(f"  {url}: {count:,}")
+                total_count += count
+            print(f"  Total for {portal}: {portal_total:,}")
+            print()
         print("------------------------------")
-        print(f"Total: {total_count:,}")
+        print(f"Total advertisements: {total_count:,}")
 
         # Write to output file if specified
         if args.output:
             try:
                 with open(args.output, "w", encoding="utf-8") as out_file:
-                    out_file.write("Portal,Count\n")
-                    for portal, count in counts.items():
-                        out_file.write(f"{portal},{count}\n")
-                    out_file.write(f"Total,{total_count}\n")
+                    out_file.write("Portal,URL,Count\n")
+                    for portal, urls in counts.items():
+                        for url, count in urls.items():
+                            out_file.write(f"{portal},{url},{count}\n")
+                        out_file.write(f"{portal},TOTAL,{sum(urls.values())}\n")
+                    out_file.write(f"GRAND TOTAL,,{total_count}\n")
                 logger.info("Results written to %s", args.output)
             except IOError as e:
                 logger.error("Failed to write output file: %s", e)
