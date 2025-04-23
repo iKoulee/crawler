@@ -220,62 +220,187 @@ class Harvester:
             )
 
     def harvest(self, db_file_name: str) -> None:
-        connection = sqlite3.connect(db_file_name)
-        regexes = self.fetch_keywords(connection)
-        connection.commit()
-        connection.close()
+        """
+        Harvest advertisements and store them in the database.
 
+        This method fetches advertisements from the source, processes them,
+        and stores them in the database along with their keyword matches.
+
+        Args:
+            db_file_name: Path to the SQLite database file
+        """
         self.logger.info("Starting harvest process for %s", self.__class__.__name__)
+        start_time = time()
+        ads_processed = 0
+        ads_stored = 0
+        errors = 0
 
-        for advert in self.get_next_advert(db_file_name):
-            connection = sqlite3.connect(db_file_name)
-            cursor = connection.cursor()
-            # Check if the advertisement already exists in the database
-            cursor.execute(
-                "SELECT id FROM advertisements WHERE url = ?",
-                (advert.link,),
-            )
-            if cursor.fetchone():
-                self.logger.debug(
-                    "Advertisement %s already exists in the database.", advert.link
-                )
-                continue
-            # Insert the advertisement into the database
-            cursor.execute(
-                """
-                INSERT INTO advertisements 
-                (title, company, location, description, html_body, http_status, url, ad_type, filename) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    advert.get_title(),
-                    advert.get_company(),
-                    advert.get_location(),
-                    advert.get_description(),
-                    advert.source,
-                    advert.status,
-                    advert.link,
-                    advert.__class__.__name__,
-                    None,  # Default filename to None initially
-                ),
-            )
-            advert_id = cursor.lastrowid
-            matched_keywords = self.match_keywords(advert, regexes)
-            self.logger.debug(
-                "Advertisement %s matched %d keywords",
-                advert.link,
-                len(matched_keywords),
-            )
+        try:
+            # Initialize database and fetch keywords
+            try:
+                connection = sqlite3.connect(db_file_name)
+                regexes = self.fetch_keywords(connection)
 
-            for keyword_id in matched_keywords:
-                cursor.execute(
-                    "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
-                    (keyword_id, advert_id),
-                )
-            connection.commit()
-            connection.close()
+                if not regexes:
+                    self.logger.warning(
+                        "No keywords found in database, harvesting will store ads but not match keywords"
+                    )
 
-        self.logger.info("Harvest process completed for %s", self.__class__.__name__)
+                connection.commit()
+                connection.close()
+            except sqlite3.Error as e:
+                self.logger.error("Database error during initialization: %s", str(e))
+                return
+            except Exception as e:
+                self.logger.error("Unexpected error during initialization: %s", str(e))
+                return
+
+            # Process each advertisement
+            for advert in self.get_next_advert(db_file_name):
+                ads_processed += 1
+
+                try:
+                    # Connect to database for each advertisement (to avoid long-running connections)
+                    connection = sqlite3.connect(db_file_name)
+                    cursor = connection.cursor()
+
+                    try:
+                        # Check if the advertisement already exists in the database
+                        cursor.execute(
+                            "SELECT id FROM advertisements WHERE url = ?",
+                            (advert.link,),
+                        )
+                        if cursor.fetchone():
+                            self.logger.debug(
+                                "Advertisement %s already exists in the database.",
+                                advert.link,
+                            )
+                            connection.close()
+                            continue
+
+                        # Extract advertisement data safely
+                        try:
+                            title = advert.get_title() or ""
+                            company = advert.get_company() or ""
+                            location = advert.get_location() or ""
+                            description = advert.get_description() or ""
+                        except Exception as e:
+                            self.logger.warning(
+                                "Error extracting data from advertisement %s: %s. Using empty values where needed.",
+                                advert.link,
+                                str(e),
+                            )
+                            title = getattr(advert, "title", "") or ""
+                            company = getattr(advert, "company", "") or ""
+                            location = getattr(advert, "location", "") or ""
+                            description = getattr(advert, "description", "") or ""
+
+                        # Insert the advertisement into the database
+                        cursor.execute(
+                            """
+                            INSERT INTO advertisements 
+                            (title, company, location, description, html_body, http_status, url, ad_type, filename) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                title,
+                                company,
+                                location,
+                                description,
+                                advert.source,
+                                advert.status,
+                                advert.link,
+                                advert.__class__.__name__,
+                                None,  # Default filename to None initially
+                            ),
+                        )
+
+                        advert_id = cursor.lastrowid
+                        if not advert_id:
+                            self.logger.error(
+                                "Failed to get ID for inserted advertisement %s",
+                                advert.link,
+                            )
+                            connection.rollback()
+                            connection.close()
+                            errors += 1
+                            continue
+
+                        # Match and store keywords
+                        try:
+                            matched_keywords = self.match_keywords(advert, regexes)
+
+                            self.logger.debug(
+                                "Advertisement %s matched %d keywords",
+                                advert.link,
+                                len(matched_keywords),
+                            )
+
+                            for keyword_id in matched_keywords:
+                                cursor.execute(
+                                    "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
+                                    (keyword_id, advert_id),
+                                )
+                        except Exception as e:
+                            self.logger.warning(
+                                "Error matching keywords for advertisement %s: %s. Continuing without keyword matches.",
+                                advert.link,
+                                str(e),
+                            )
+
+                        # Commit changes for this advertisement
+                        connection.commit()
+                        ads_stored += 1
+
+                        # Log progress periodically
+                        if ads_stored % 10 == 0:
+                            elapsed = time() - start_time
+                            self.logger.info(
+                                "Processed %d advertisements, stored %d new ones (%.2f per minute)",
+                                ads_processed,
+                                ads_stored,
+                                (ads_stored / (elapsed / 60)) if elapsed > 0 else 0,
+                            )
+
+                    except sqlite3.Error as e:
+                        self.logger.error(
+                            "Database error processing advertisement %s: %s",
+                            advert.link,
+                            str(e),
+                        )
+                        connection.rollback()
+                        errors += 1
+                    except Exception as e:
+                        self.logger.error(
+                            "Unexpected error processing advertisement %s: %s",
+                            advert.link,
+                            str(e),
+                        )
+                        connection.rollback()
+                        errors += 1
+                    finally:
+                        connection.close()
+
+                except Exception as e:
+                    self.logger.error(
+                        "Critical error processing advertisement: %s", str(e)
+                    )
+                    errors += 1
+
+        except Exception as e:
+            self.logger.error("Critical error in harvest process: %s", str(e))
+            errors += 1
+
+        # Log summary
+        elapsed_time = time() - start_time
+        self.logger.info(
+            "Harvest process completed for %s: Processed %d advertisements, stored %d new ones, encountered %d errors in %.2f seconds",
+            self.__class__.__name__,
+            ads_processed,
+            ads_stored,
+            errors,
+            elapsed_time,
+        )
 
     def match_keywords(
         self, advert: Advertisement, regexes: Dict[int, re.Pattern]
@@ -1104,63 +1229,133 @@ class KarriereHarvester(Harvester):
         sitemap_count = 0
         link_count = 0
 
-        # Get sitemaps from robots.txt
-        sitemaps = self._get_robot_parser().sitemaps
-        if not sitemaps:
-            self.logger.warning("No sitemaps found in robots.txt")
+        # Safely get robot parser and sitemaps
+        try:
+            robot_parser = self._get_robot_parser()
+            if not robot_parser:
+                self.logger.error("Failed to get robot parser")
+                return
+
+            # Get sitemaps from robots.txt
+            sitemaps = robot_parser.sitemaps
+            if not sitemaps:
+                self.logger.warning("No sitemaps found in robots.txt")
+                return
+        except Exception as e:
+            self.logger.error("Error retrieving sitemaps from robots.txt: %s", str(e))
             return
 
+        # Process each sitemap
         for sitemap_link in sitemaps:
-            # Check if sitemap_link is None
+            # Skip None or non-string sitemap links
             if sitemap_link is None:
                 self.logger.warning("Found None sitemap link in robots.txt, skipping")
                 continue
 
-            # Check if it's a job sitemap
+            if not isinstance(sitemap_link, str):
+                self.logger.warning(
+                    "Sitemap link is not a string. Type: %s, skipping",
+                    type(sitemap_link),
+                )
+                continue
+
+            # Process job-related sitemaps
             try:
-                if re.match(r".*sitemap-jobs.*", sitemap_link):
-                    sitemap_count += 1
-                    self.logger.info("Processing jobs sitemap: %s", sitemap_link)
+                # Skip non-job sitemaps
+                if not re.search(r".*sitemap-jobs.*", sitemap_link):
+                    continue
 
-                    try:
-                        response = self._get(sitemap_link, headers=self._headers)
-                        response.raise_for_status()
-                        response.encoding = response.apparent_encoding
-                        sitemap = ET.fromstring(response.text)
+                sitemap_count += 1
+                self.logger.info("Processing jobs sitemap: %s", sitemap_link)
 
-                        sitemap_link_count = 0
-                        for link in sitemap.findall(
-                            ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
-                        ):
-                            # Check if link.text is None
-                            if link.text is None:
-                                self.logger.warning(
-                                    "Found None link in sitemap, skipping"
-                                )
-                                continue
+                try:
+                    # Get sitemap content
+                    response = self._get(sitemap_link, headers=self._headers)
 
-                            sitemap_link_count += 1
-                            link_count += 1
-                            yield link.text
-
-                        self.logger.info(
-                            "Extracted %d links from sitemap %s",
-                            sitemap_link_count,
+                    # Check response validity
+                    if response.status_code != 200:
+                        self.logger.warning(
+                            "Failed to fetch sitemap %s: HTTP %d",
                             sitemap_link,
-                        )
-                    except requests.RequestException as e:
-                        self.logger.error(
-                            "Error fetching sitemap %s: %s", sitemap_link, e
+                            response.status_code,
                         )
                         continue
-                    except ET.ParseError as e:
-                        self.logger.error(
-                            "Error parsing sitemap %s: %s", sitemap_link, e
+
+                    response.encoding = response.apparent_encoding
+                    sitemap_text = response.text
+
+                    # Validate sitemap content
+                    if not sitemap_text or not sitemap_text.strip():
+                        self.logger.warning(
+                            "Empty sitemap response from %s", sitemap_link
                         )
                         continue
-            except TypeError as e:
+
+                    # Parse XML safely
+                    try:
+                        sitemap = ET.fromstring(sitemap_text)
+                    except ET.ParseError as parse_error:
+                        self.logger.error(
+                            "XML parse error in sitemap %s: %s",
+                            sitemap_link,
+                            str(parse_error),
+                        )
+                        continue
+
+                    # Extract links
+                    sitemap_link_count = 0
+
+                    # Using namespace dictionary for more robust XML parsing
+                    namespaces = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+                    # Try with namespaces first, then without if none found
+                    loc_elements = sitemap.findall(".//sm:loc", namespaces)
+                    if not loc_elements:
+                        loc_elements = sitemap.findall(".//loc")
+
+                    for link in loc_elements:
+                        link_text = link.text
+
+                        # Skip empty links
+                        if link_text is None or not link_text.strip():
+                            self.logger.warning("Found empty link in sitemap, skipping")
+                            continue
+
+                        sitemap_link_count += 1
+                        link_count += 1
+                        yield link_text.strip()
+
+                    self.logger.info(
+                        "Extracted %d links from sitemap %s",
+                        sitemap_link_count,
+                        sitemap_link,
+                    )
+
+                except requests.RequestException as e:
+                    self.logger.error(
+                        "Error fetching sitemap %s: %s", sitemap_link, str(e)
+                    )
+                    continue
+                except Exception as e:
+                    self.logger.error(
+                        "Unexpected error processing sitemap %s: %s",
+                        sitemap_link,
+                        str(e),
+                    )
+                    continue
+
+            except re.error as e:
                 self.logger.error(
-                    "Error matching sitemap link pattern: %s. Link: %s", e, sitemap_link
+                    "Regex error matching sitemap pattern: %s. Link: %s",
+                    str(e),
+                    sitemap_link,
+                )
+                continue
+            except Exception as e:
+                self.logger.error(
+                    "Unexpected error processing sitemap link %s: %s",
+                    sitemap_link,
+                    str(e),
                 )
                 continue
 
