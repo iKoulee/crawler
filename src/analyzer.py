@@ -1,7 +1,8 @@
 import sqlite3
 import re
 import logging
-from typing import Dict, List, Any, Optional, Set, Pattern, Iterator, Tuple
+from typing import Dict, List, Any, Optional
+
 import yaml
 
 from advert import Advertisement, AdFactory
