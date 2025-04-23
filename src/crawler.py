@@ -5,10 +5,10 @@ import yaml
 import argparse
 import os
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any
 import re
 
-from advert import AdFactory
+from advert import AdFactory, Advertisement
 from harvester import Harvester, HarvesterFactory
 
 
@@ -381,7 +381,7 @@ def process_advertisements_with_factory(
 
 
 def match_keywords_for_ad(
-    ad: "Advertisement", regexes: Dict[int, re.Pattern], logger: logging.Logger
+    ad: Advertisement, regexes: Dict[int, re.Pattern], logger: logging.Logger
 ) -> List[int]:
     """
     Match an advertisement against keywords and return matching keyword IDs.

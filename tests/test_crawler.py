@@ -148,23 +148,45 @@ class TestThreadManagement(unittest.TestCase):
 
         # Mock configuration and connections
         with patch("builtins.open", mock_open()):
-            with patch("yaml.safe_load", return_value={"keywords": []}):
+            with patch(
+                "yaml.safe_load",
+                return_value={
+                    "keywords": [],
+                    "portals": [
+                        {"engine": "MockHarvester1"},
+                        {"engine": "MockHarvester2"},
+                    ],
+                },
+            ):
                 with patch("sqlite3.connect"):
-                    with patch("crawler.Harvester"):
-                        with patch("crawler.HarvesterFactory") as mock_factory:
-                            # Setup mock harvester factory to return our mock harvesters
-                            mock_factory.return_value.get_next_harvester.return_value = [
-                                mock_harvester1,
-                                mock_harvester2,
-                            ]
+                    with patch.object(crawler, "HarvesterFactory") as mock_factory:
+                        # Setup mock harvester factory to return our mock harvesters
+                        mock_factory_instance = MagicMock()
+                        mock_factory.return_value = mock_factory_instance
+                        mock_factory_instance.get_next_harvester.return_value = [
+                            mock_harvester1,
+                            mock_harvester2,
+                        ]
 
-                            # Run the main function
-                            crawler.main()
+                        # Run the main function
+                        crawler.main()
 
         # Verify threads were created and started
-        self.assertEqual(mock_thread.call_count, 2)
-        self.assertEqual(mock_thread_instance.start.call_count, 2)
-        self.assertEqual(mock_thread_instance.join.call_count, 2)
+        self.assertEqual(
+            mock_thread.call_count,
+            2,
+            "Thread constructor should be called twice (once for each harvester)",
+        )
+        self.assertEqual(
+            mock_thread_instance.start.call_count,
+            2,
+            "Thread.start() should be called twice",
+        )
+        self.assertEqual(
+            mock_thread_instance.join.call_count,
+            2,
+            "Thread.join() should be called twice",
+        )
 
 
 class TestDatabaseOperations(unittest.TestCase):

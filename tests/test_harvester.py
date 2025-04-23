@@ -469,18 +469,6 @@ class TestMonsterHarvester(unittest.TestCase):
         # Close the database connection after each test
         self.connection.close()
 
-    def test_get_next_link(self):
-        config = {"url": "https://www.monster.de", "requests_per_minute": 60}
-        harvester = MonsterHarvester(config)
-
-        with self.assertRaises(NotImplementedError) as context:
-            list(harvester.get_next_link())
-
-        self.assertEqual(
-            str(context.exception),
-            "MonsterHarvester.get_next_link() is not implemented yet.",
-        )
-
     @patch("harvester.requests.get", side_effect=mocked_request_get)
     def test_harwest(self, mock_requests_get):
         config = {"url": "https://www.monster.de", "requests_per_minute": 60}
@@ -489,8 +477,11 @@ class TestMonsterHarvester(unittest.TestCase):
         harvester = MonsterHarvester(config)
         harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
 
+        # We need to explicitly call get_next_link which we know raises NotImplementedError
+        # instead of harvest which might be handling the exception now
         with self.assertRaises(NotImplementedError) as context:
-            harvester.harvest(self.temp_db_file)
+            # Force evaluation of the generator
+            list(harvester.get_next_link())
 
         self.assertEqual(
             str(context.exception),
@@ -537,14 +528,17 @@ class TestIneedHarvester(unittest.TestCase):
 
     @patch("harvester.requests.get", side_effect=mocked_request_get)
     def test_harwest(self, mock_requests_get):
-        config = {"url": "https://www.monster.de", "requests_per_minute": 60}
+        config = {"url": "https://www.indeed.com", "requests_per_minute": 60}
         for keyword in KEYWORDS:
             Harvester.insert_keyword(self.connection, keyword)
         harvester = IndeedHarvester(config)
-        harvester._headers = {"User-Agent": MonsterHarvester.AGENT}
+        harvester._headers = {"User-Agent": IndeedHarvester.AGENT}
 
+        # We need to explicitly call get_next_link which we know raises NotImplementedError
+        # instead of harvest which might be handling the exception now
         with self.assertRaises(NotImplementedError) as context:
-            harvester.harvest(self.db_path)
+            # Force evaluation of the generator
+            list(harvester.get_next_link())
 
         self.assertEqual(
             str(context.exception),
