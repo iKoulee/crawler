@@ -11,6 +11,7 @@ import re
 from advert import AdFactory, Advertisement
 from harvester import Harvester, HarvesterFactory
 from keyword_manager import KeywordManager
+from advert_exporter import AdvertExporter
 
 
 def setup_logging(log_level: str) -> None:
@@ -163,8 +164,11 @@ def assembly_command(args: argparse.Namespace, logger: logging.Logger) -> None:
             output_file = f"{base_name}_export.csv"
             logger.info("No output file specified, using: %s", output_file)
 
+        # Create an AdvertExporter instance
+        exporter = AdvertExporter(logger)
+
         # Export advertisements to CSV
-        count = Harvester.export_to_csv(
+        count = exporter.export_to_csv(
             connection, output_file, min_id=args.min_id, max_id=args.max_id
         )
 
@@ -198,8 +202,11 @@ def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
             os.makedirs(args.output_dir)
             logger.info("Created output directory: %s", args.output_dir)
 
+        # Create an AdvertExporter instance
+        exporter = AdvertExporter(logger)
+
         # Export HTML bodies
-        total_exported, category_counts = Harvester.export_html_bodies(
+        total_exported, category_counts = exporter.export_html_bodies(
             connection,
             args.output_dir,
             args.config,
