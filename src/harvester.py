@@ -407,11 +407,30 @@ class Harvester:
     ) -> List[int]:
         """
         Matches the advertisement against the keywords.
+
+        Args:
+            advert: Advertisement to match against keywords
+            regexes: Dictionary mapping keyword IDs to compiled regex patterns
+
+        Returns:
+            List of keyword IDs that match the advertisement
         """
         result = []
         # Extract the text from the advertisement
+        description = advert.get_description()
+
+        # If no description is available, fall back to the raw source
+        if description is None:
+            description = advert.source
+
+        # Ensure we have a string to search
+        if description is None:
+            self.logger.warning("No text available to match keywords for advertisement")
+            return result
+
+        # Search for each keyword in the description
         for id, regex in regexes.items():
-            match = regex.search(advert.get_description())
+            match = regex.search(description)
             if match:
                 # If the keyword matches, add it to the result
                 result.append(id)
