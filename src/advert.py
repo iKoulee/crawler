@@ -228,12 +228,51 @@ class KarriereAdvertisement(Advertisement):
     def get_description(self) -> Optional[str]:
         """
         Extract the job description from a karriere.at advertisement.
+        Preserves paragraphs, line breaks, and lists in the output text.
 
         Returns:
             Job description or None if not found
         """
-        description_element = self.soup.select_one(".m-jobContent__jobDetail")
-        return description_element.text.strip() if description_element else None
+        # Try first with m-jobContent__jobText selector (current)
+        description_element = self.soup.select_one(".m-jobContent__jobText")
+
+        # If not found, try the older selector used in tests (m-jobContent__jobDetail)
+        if not description_element:
+            description_element = self.soup.select_one(".m-jobContent__jobDetail")
+
+        if not description_element:
+            return None
+
+        # For simple text-only elements, just return the text directly
+        if not (
+            description_element.find_all("br")
+            or description_element.find_all("p")
+            or description_element.find_all("li")
+        ):
+            return description_element.get_text().strip()
+
+        # Preserve paragraphs, line breaks, and lists
+        # Replace <p>, <br>, <li> with appropriate line breaks
+        for br in description_element.find_all("br"):
+            br.replace_with("\n")
+
+        for p in description_element.find_all("p"):
+            p.append(self.soup.new_string("\n\n"))
+
+        # Handle lists by adding newlines and bullet points
+        for li in description_element.find_all("li"):
+            li.insert_before(self.soup.new_string("• "))
+            li.append(self.soup.new_string("\n"))
+
+        # Get the text and normalize whitespace
+        description = description_element.get_text()
+
+        # Replace multiple consecutive newlines with just two
+        import re
+
+        description = re.sub(r"\n{3,}", "\n\n", description)
+
+        return description.strip()
 
     def get_date(self) -> Optional[str]:
         """
@@ -286,15 +325,50 @@ class StepstoneAdvertisement(Advertisement):
     def get_description(self) -> Optional[str]:
         """
         Extract the job description from a stepstone.at advertisement.
+        Preserves paragraphs, line breaks, and lists in the output text.
 
         Returns:
-            Job description or empty string if not found
+            Job description or None if not found
         """
         description_elements = self.soup.find_all("article")
-        description: str = ""
+        if not description_elements:
+            return None
+
+        # Create a new BeautifulSoup element to hold the consolidated description
+        consolidated_description = self.soup.new_tag("div")
+
+        # Add each article element to our consolidated description
         for element in description_elements:
-            description += element.text.strip()
-        return description if description else None
+            consolidated_description.append(element)
+
+        # Preserve paragraphs, line breaks, and lists
+        for br in consolidated_description.find_all("br"):
+            br.replace_with("\n")
+
+        for p in consolidated_description.find_all("p"):
+            p.append(self.soup.new_string("\n\n"))
+
+        # Handle lists by adding newlines and bullet points
+        for li in consolidated_description.find_all("li"):
+            li.insert_before(self.soup.new_string("• "))
+            li.append(self.soup.new_string("\n"))
+
+        # Handle headers to make them stand out
+        for header in consolidated_description.find_all(
+            ["h1", "h2", "h3", "h4", "h5", "h6"]
+        ):
+            header.insert_before(self.soup.new_string("\n\n"))
+            header.append(self.soup.new_string("\n"))
+
+        # Get the text and normalize whitespace
+        description = consolidated_description.get_text()
+
+        # Replace multiple consecutive newlines with just two
+        import re
+
+        description = re.sub(r"\n{3,}", "\n\n", description)
+
+        return description.strip()
 
     def get_date(self) -> Optional[str]:
         """

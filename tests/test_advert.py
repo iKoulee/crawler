@@ -247,11 +247,13 @@ class TestStepstoneAdvertisement(unittest.TestCase):
     def test_to_dict(self) -> None:
         """Test that to_dict returns the correct dictionary representation."""
         result = self.advert.to_dict()
+
+        # Update the expected description to match the new format with proper line breaks
         expected = {
             "title": "Software Developer",
             "company": "ABC Company",
             "location": "Vienna, Austria",
-            "description": "We are seeking a Python developer with 3+ years experience.\nSkills required: Python, Django, SQL",
+            "description": "We are seeking a Python developer with 3+ years experience.\n\nSkills required: Python, Django, SQL",
             "date": "July 15, 2023",
             "link": "https://www.stepstone.at/job/12345",
             "source": self.sample_html,
