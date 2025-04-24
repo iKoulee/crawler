@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 )
 from harvester import Harvester
+from keyword_manager import KeywordManager
 from advert import Advertisement, StepstoneAdvertisement
 
 # Configure logging
@@ -128,18 +129,21 @@ class TestKeywordFunctionality(unittest.TestCase):
 
     def test_compile_keyword(self) -> None:
         """Characterize the _compile_keyword method behavior."""
+        # Create a KeywordManager instance
+        keyword_manager = KeywordManager()
+        
         # Test with case sensitive = True
-        pattern1 = Harvester._compile_keyword(search="Python", case_sensitive=True)
+        pattern1 = keyword_manager._compile_keyword(search="Python", case_sensitive=True)
         self.assertEqual(pattern1.pattern, "Python")
         self.assertFalse(pattern1.flags & re.IGNORECASE)
 
         # Test with case sensitive = False
-        pattern2 = Harvester._compile_keyword(search="Python", case_sensitive=False)
+        pattern2 = keyword_manager._compile_keyword(search="Python", case_sensitive=False)
         self.assertEqual(pattern2.pattern, "Python")
         self.assertTrue(pattern2.flags & re.IGNORECASE)
 
         # Test with a more complex regex
-        pattern3 = Harvester._compile_keyword(
+        pattern3 = keyword_manager._compile_keyword(
             search=r"data\s+scien(ce|tist)", case_sensitive=False
         )
         self.assertEqual(pattern3.pattern, r"data\s+scien(ce|tist)")

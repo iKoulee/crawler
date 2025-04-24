@@ -10,7 +10,7 @@ from abc import abstractmethod
 from time import sleep, time
 from datetime import datetime
 from protego import Protego
-from typing import Dict, List, Any, Iterator, Optional, Type, Tuple, Set, Pattern
+from typing import Dict, List, Any, Iterator, Optional, Type, Tuple, Pattern
 import os
 import yaml
 from pathlib import Path
@@ -24,6 +24,7 @@ from advert import (
     KarriereAdvertisement,
     StepstoneAdvertisement,
 )
+from keyword_manager import KeywordManager
 
 
 class Harvester:
@@ -45,6 +46,7 @@ class Harvester:
         # Add configurable retry_timeout in minutes (default: 5 minutes)
         self.retry_timeout: int = config.get("retry_timeout", 5)
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.keyword_manager = KeywordManager(self.logger)
 
     @staticmethod
     def create_schema(connection: sqlite3.Connection) -> None:
@@ -78,31 +80,6 @@ class Harvester:
             """
         )
 
-        # Create keywords table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS keywords (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                title TEXT,
-                search TEXT NOT NULL UNIQUE,
-                case_sensitive BOOLEAN NOT NULL DEFAULT 0 CHECK (case_sensitive IN (0, 1))
-            )
-            """
-        )
-
-        # Create many-to-many relationship table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS keyword_advertisement (
-                keyword_id INTEGER,
-                advertisement_id INTEGER,
-                FOREIGN KEY (keyword_id) REFERENCES keywords(id),
-                FOREIGN KEY (advertisement_id) REFERENCES advertisements(id),
-                PRIMARY KEY (keyword_id, advertisement_id)
-            )
-            """
-        )
-
         # Create indexes for better performance
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_advertisements_url ON advertisements(url)"
@@ -111,21 +88,34 @@ class Harvester:
             "CREATE INDEX IF NOT EXISTS idx_advertisements_ad_type ON advertisements(ad_type)"
         )
 
+        # Create keyword-related tables using KeywordManager
+        keyword_manager = KeywordManager()
+        keyword_manager.create_keyword_tables(connection)
+
         connection.commit()
 
     @staticmethod
     def insert_keyword(connection: sqlite3.Connection, keyword: Dict[str, Any]) -> None:
-        cursor = connection.cursor()
-        cursor.execute(
-            "INSERT OR IGNORE INTO keywords (title, search, case_sensitive) VALUES (?, ?, ?)",
-            (keyword["title"], keyword["search"], keyword["case_sensitive"]),
-        )
-        connection.commit()
+        """
+        Insert a keyword into the database if it doesn't already exist.
+
+        Note: This static method provides backward compatibility with existing code.
+        The recommended approach is to use KeywordManager.insert_keyword directly.
+
+        Args:
+            connection: SQLite database connection
+            keyword: Dictionary containing keyword data (title, search, case_sensitive)
+        """
+        keyword_manager = KeywordManager()
+        keyword_manager.insert_keyword(connection, keyword)
 
     @staticmethod
     def fetch_keywords(connection: sqlite3.Connection) -> Dict[int, re.Pattern]:
         """
         Fetch and compile keywords from the database.
+
+        Note: This static method provides backward compatibility with existing code.
+        The recommended approach is to use KeywordManager.fetch_keywords directly.
 
         Args:
             connection: SQLite database connection
@@ -133,31 +123,8 @@ class Harvester:
         Returns:
             Dictionary mapping keyword IDs to compiled regex patterns
         """
-        cursor = connection.cursor()
-        cursor.execute("SELECT id, search, case_sensitive FROM keywords")
-        result = cursor.fetchall()
-        if result:
-            return dict(
-                [
-                    (
-                        row[0],
-                        Harvester._compile_keyword(
-                            search=row[1], case_sensitive=row[2]
-                        ),
-                    )
-                    for row in result
-                ]
-            )
-        return {}
-
-    @staticmethod
-    def _compile_keyword(search: str, case_sensitive: bool) -> re.Pattern:
-        """
-        Compiles a keyword into a regex pattern.
-        """
-        if case_sensitive:
-            return re.compile(search)
-        return re.compile(search, re.IGNORECASE)
+        keyword_manager = KeywordManager()
+        return keyword_manager.fetch_keywords(connection)
 
     @abstractmethod
     def get_next_link(self) -> Iterator[str]:
@@ -336,11 +303,9 @@ class Harvester:
                                 len(matched_keywords),
                             )
 
-                            for keyword_id in matched_keywords:
-                                cursor.execute(
-                                    "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
-                                    (keyword_id, advert_id),
-                                )
+                            self.store_keyword_matches(
+                                connection, advert_id, matched_keywords
+                            )
                         except Exception as e:
                             self.logger.warning(
                                 "Error matching keywords for advertisement %s: %s. Continuing without keyword matches.",
@@ -415,26 +380,25 @@ class Harvester:
         Returns:
             List of keyword IDs that match the advertisement
         """
-        result = []
-        # Extract the text from the advertisement
-        description = advert.get_description()
+        return self.keyword_manager.match_keywords(advert, regexes)
 
-        # If no description is available, fall back to the raw source
-        if description is None:
-            description = advert.source
+    def store_keyword_matches(
+        self,
+        connection: sqlite3.Connection,
+        advertisement_id: int,
+        matched_keywords: List[int],
+    ) -> None:
+        """
+        Store the matches between an advertisement and keywords.
 
-        # Ensure we have a string to search
-        if description is None:
-            self.logger.warning("No text available to match keywords for advertisement")
-            return result
-
-        # Search for each keyword in the description
-        for id, regex in regexes.items():
-            match = regex.search(description)
-            if match:
-                # If the keyword matches, add it to the result
-                result.append(id)
-        return result
+        Args:
+            connection: SQLite database connection
+            advertisement_id: ID of the advertisement
+            matched_keywords: List of keyword IDs that matched the advertisement
+        """
+        self.keyword_manager.store_keyword_matches(
+            connection, advertisement_id, matched_keywords
+        )
 
     def _get_robot_parser(self, refresh: bool = False) -> Protego:
         if not self._robot_parser or refresh:
