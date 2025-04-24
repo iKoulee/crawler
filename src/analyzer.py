@@ -1,11 +1,12 @@
 import sqlite3
-import re
-import logging
-from typing import Dict, List, Any, Optional
-
 import yaml
+import logging
+import os
+from typing import Dict, Any, List, Optional, Tuple, Pattern
+import re
 
-from advert import Advertisement, AdFactory
+from advert import AdFactory, Advertisement
+from keyword_manager import KeywordManager
 
 
 class AdvertAnalyzer:
@@ -24,6 +25,7 @@ class AdvertAnalyzer:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.compiled_keywords: Dict[int, re.Pattern] = {}
         self._connection: Optional[sqlite3.Connection] = None
+        self.keyword_manager = KeywordManager(self.logger)
 
     def _get_connection(self) -> sqlite3.Connection:
         """
@@ -70,7 +72,8 @@ class AdvertAnalyzer:
 
             for keyword in config["keywords"]:
                 try:
-                    self._insert_keyword(connection, keyword)
+                    # Use KeywordManager to insert keywords
+                    self.keyword_manager.insert_keyword(connection, keyword)
                     count += 1
                     self.logger.debug(
                         "Inserted keyword: %s", keyword.get("title", "Unnamed")
@@ -139,20 +142,10 @@ class AdvertAnalyzer:
             Dictionary mapping keyword IDs to compiled regex patterns
         """
         connection = self._get_connection()
-        cursor = connection.cursor()
-        cursor.execute("SELECT id, search, case_sensitive FROM keywords")
-        result = cursor.fetchall()
-
-        compiled_keywords = {}
-        if result:
-            for row in result:
-                keyword_id, search, case_sensitive = row
-                flags = 0 if case_sensitive else re.IGNORECASE
-                compiled_keywords[keyword_id] = re.compile(search, flags)
-
-        self.compiled_keywords = compiled_keywords
-        self.logger.debug("Compiled %d keyword patterns", len(compiled_keywords))
-        return compiled_keywords
+        # Use KeywordManager to fetch and compile keywords
+        self.compiled_keywords = self.keyword_manager.fetch_keywords(connection)
+        self.logger.debug("Compiled %d keyword patterns", len(self.compiled_keywords))
+        return self.compiled_keywords
 
     def match_keywords_for_ad(self, ad: Advertisement) -> List[int]:
         """
@@ -168,19 +161,8 @@ class AdvertAnalyzer:
         if not self.compiled_keywords:
             self._compile_keyword_patterns()
 
-        matched_keywords = []
-        description = ad.get_description()
-
-        # If no description, check the raw source
-        if not description:
-            description = ad.source
-
-        # Match against each keyword regex
-        for keyword_id, regex in self.compiled_keywords.items():
-            if regex.search(description):
-                matched_keywords.append(keyword_id)
-
-        return matched_keywords
+        # Delegate keyword matching to KeywordManager
+        return self.keyword_manager.match_keywords(ad, self.compiled_keywords)
 
     def update_advertisement_keywords(self, ad_id: int, keyword_ids: List[int]) -> None:
         """
@@ -203,15 +185,8 @@ class AdvertAnalyzer:
                 "DELETE FROM keyword_advertisement WHERE advertisement_id = ?", (ad_id,)
             )
 
-            # Insert new keyword associations
-            for keyword_id in keyword_ids:
-                cursor.execute(
-                    """
-                    INSERT INTO keyword_advertisement 
-                    (keyword_id, advertisement_id) VALUES (?, ?)
-                    """,
-                    (keyword_id, ad_id),
-                )
+            # Use KeywordManager to store keyword matches
+            self.keyword_manager.store_keyword_matches(connection, ad_id, keyword_ids)
 
             # Commit changes immediately to ensure they're visible to other connections
             connection.commit()

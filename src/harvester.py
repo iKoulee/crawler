@@ -1,10 +1,7 @@
 from functools import cached_property
-import re
 import sqlite3
 from urllib.parse import urlparse
 import requests
-import csv
-import io
 import logging
 from abc import abstractmethod
 from time import sleep, time
@@ -13,9 +10,10 @@ from protego import Protego
 from typing import Dict, List, Any, Iterator, Optional, Type, Tuple, Pattern
 import os
 import yaml
+import csv
+import io
 from pathlib import Path
-
-from bs4 import BeautifulSoup
+import re
 import xml.etree.ElementTree as ET
 
 from advert import (
@@ -53,8 +51,8 @@ class Harvester:
         """
         Create the database schema if it doesn't exist.
 
-        This method creates the tables needed for storing advertisements, keywords,
-        and the relationships between them.
+        This method creates the tables needed for storing advertisements.
+        Keyword-related tables are created by the KeywordManager class.
 
         Args:
             connection: SQLite database connection

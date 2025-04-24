@@ -10,6 +10,7 @@ import re
 
 from advert import AdFactory, Advertisement
 from harvester import Harvester, HarvesterFactory
+from keyword_manager import KeywordManager
 
 
 def setup_logging(log_level: str) -> None:
@@ -48,8 +49,12 @@ def harvest_command(args: argparse.Namespace, logger: logging.Logger) -> None:
         Harvester.create_schema(connection)
         logger.debug("Database schema created")
 
+        # Initialize KeywordManager directly
+        keyword_manager = KeywordManager(logger)
+
+        # Insert keywords using KeywordManager instead of Harvester
         for keyword in config["keywords"]:
-            Harvester.insert_keyword(connection, keyword)
+            keyword_manager.insert_keyword(connection, keyword)
             logger.debug("Added keyword: %s", keyword)
 
         harvester_factory = HarvesterFactory(config)
@@ -394,20 +399,9 @@ def match_keywords_for_ad(
     Returns:
         List of keyword IDs that match the advertisement
     """
-    # Extract text content from the advertisement
-    matched_keywords = []
-    description = ad.get_description()
-
-    # If no description, check the raw source
-    if not description:
-        description = ad.source
-
-    # Match against each keyword regex
-    for keyword_id, regex in regexes.items():
-        if regex.search(description):
-            matched_keywords.append(keyword_id)
-
-    return matched_keywords
+    # Use KeywordManager directly for matching keywords
+    keyword_manager = KeywordManager(logger)
+    return keyword_manager.match_keywords(ad, regexes)
 
 
 def update_advertisement_keywords(
@@ -429,20 +423,18 @@ def update_advertisement_keywords(
         logger.warning("Cannot update keywords for advertisement with None ID")
         return
 
-    cursor = connection.cursor()
+    # Use KeywordManager directly for storing keyword matches
+    keyword_manager = KeywordManager(logger)
 
     try:
         # First delete any existing keyword associations for this ad
+        cursor = connection.cursor()
         cursor.execute(
             "DELETE FROM keyword_advertisement WHERE advertisement_id = ?", (ad_id,)
         )
 
-        # Insert new keyword associations
-        for keyword_id in keyword_ids:
-            cursor.execute(
-                "INSERT INTO keyword_advertisement (keyword_id, advertisement_id) VALUES (?, ?)",
-                (keyword_id, ad_id),
-            )
+        # Store new keyword matches using KeywordManager
+        keyword_manager.store_keyword_matches(connection, ad_id, keyword_ids)
 
         logger.debug(
             "Updated advertisement ID %d with %d keyword associations",
