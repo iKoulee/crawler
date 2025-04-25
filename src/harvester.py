@@ -371,6 +371,9 @@ class Harvester:
         """
         Matches the advertisement against the keywords.
 
+        By default, matches against both the title and description.
+        This method delegates to KeywordManager's match_keywords method.
+
         Args:
             advert: Advertisement to match against keywords
             regexes: Dictionary mapping keyword IDs to compiled regex patterns
@@ -378,7 +381,8 @@ class Harvester:
         Returns:
             List of keyword IDs that match the advertisement
         """
-        return self.keyword_manager.match_keywords(advert, regexes)
+        # Set title_only to False to match against title and description for maximum coverage
+        return self.keyword_manager.match_keywords(advert, regexes, title_only=False)
 
     def store_keyword_matches(
         self,

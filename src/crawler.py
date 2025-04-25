@@ -268,6 +268,7 @@ def analyze_command(args: argparse.Namespace, logger: logging.Logger) -> None:
             "max_id": args.max_id,
             "batch_size": args.batch_size,
             "reset_tables": not args.no_reset,
+            "include_description": args.include_description,
         }
 
         logger.info(
@@ -803,6 +804,11 @@ def main() -> None:
         "--no-reset",
         action="store_true",
         help="Don't reset keyword tables before analysis (use for incremental updates)",
+    )
+    analyze_parser.add_argument(
+        "--include-description",
+        action="store_true",
+        help="Match keywords in both title and description (default is title-only matching)",
     )
 
     # Create the parser for the "update" command

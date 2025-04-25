@@ -340,12 +340,14 @@ class TestAdvertAnalyzer(unittest.TestCase):
         ad1 = MagicMock(spec=Advertisement)
         ad1.id = 1
         ad1.source = "<html><body>Python developer</body></html>"
-        ad1.get_description.return_value = "Python developer position"
+        ad1.get_title = MagicMock(return_value="Python Developer")
+        ad1.get_description = MagicMock(return_value="Python developer position")
 
         ad2 = MagicMock(spec=Advertisement)
         ad2.id = 2
         ad2.source = "<html><body>Java and SQL developer</body></html>"
-        ad2.get_description.return_value = "Java and SQL developer position"
+        ad2.get_title = MagicMock(return_value="Java Developer")
+        ad2.get_description = MagicMock(return_value="Java and SQL developer position")
 
         # Set up the mock to return our test advertisements
         mock_fetch.return_value = [ad1, ad2]
@@ -354,7 +356,7 @@ class TestAdvertAnalyzer(unittest.TestCase):
         self.analyzer.load_keywords_from_config()
         self.analyzer._compile_keyword_patterns()
 
-        # Process advertisements
+        # Process advertisements with default settings (title_only matching)
         count = self.analyzer.process_advertisements()
 
         # Verify the correct number of advertisements were processed
@@ -365,8 +367,27 @@ class TestAdvertAnalyzer(unittest.TestCase):
         call_kwargs = mock_fetch.call_args[1]
         self.assertEqual(call_kwargs["batch_size"], 100)
 
-        # Verify that match_keywords_for_ad was called for each ad
+        # Verify that both get_title and get_description were called
+        ad1.get_title.assert_called()
+        ad2.get_title.assert_called()
+
+        # Reset mocks and try with include_description=True
+        mock_fetch.reset_mock()
+        ad1.get_title.reset_mock()
+        ad1.get_description.reset_mock()
+        ad2.get_title.reset_mock()
+        ad2.get_description.reset_mock()
+        
+        # Set up the mock to return our test advertisements again
+        mock_fetch.return_value = [ad1, ad2]
+        
+        # Process with include_description=True
+        count = self.analyzer.process_advertisements(include_description=True)
+        
+        # Verify both title and description were used
+        ad1.get_title.assert_called()
         ad1.get_description.assert_called()
+        ad2.get_title.assert_called()
         ad2.get_description.assert_called()
 
     def test_match_keywords_for_ad(self) -> None:
@@ -375,32 +396,45 @@ class TestAdvertAnalyzer(unittest.TestCase):
         self.analyzer.load_keywords_from_config()
         self.analyzer._compile_keyword_patterns()
 
-        # Create a test advertisement
+        # Create a test advertisement with proper mocking for title and description
         ad = MagicMock(spec=Advertisement)
-        ad.source = (
-            "<html><body>Python and Java developer with SQL knowledge</body></html>"
-        )
-        ad.get_description.return_value = "Python and Java developer with SQL knowledge"
+        ad.source = "<html><body>Python and Java developer with SQL knowledge</body></html>"
+        ad.get_title = MagicMock(return_value="Python and Java Developer")
+        ad.get_description = MagicMock(return_value="Developer with SQL knowledge")
 
-        # Match keywords
+        # Match keywords using title only (default)
         matched_ids = self.analyzer.match_keywords_for_ad(ad)
-
+        
+        # Verify Python and Java keywords matched in title
+        self.assertEqual(len(matched_ids), 2)
+        
+        # Now match with include_description=True which should also find SQL
+        matched_ids = self.analyzer.match_keywords_for_ad(ad, include_description=True)
+        
         # Verify all three keywords matched
         self.assertEqual(len(matched_ids), 3)
 
-        # Try another advertisement with fewer matches
-        ad.get_description.return_value = "JavaScript developer"
-        ad.source = "<html><body>JavaScript developer</body></html>"
+        # Try another advertisement with no matches in title but one in description
+        ad.get_title = MagicMock(return_value="JavaScript Developer")
+        ad.get_description = MagicMock(return_value="Knowledge of Python required")
+        ad.source = "<html><body>JavaScript developer with Python knowledge</body></html>"
 
+        # With title only, shouldn't match any keywords
         matched_ids = self.analyzer.match_keywords_for_ad(ad)
         self.assertEqual(len(matched_ids), 0)
+        
+        # With description included, should match Python
+        matched_ids = self.analyzer.match_keywords_for_ad(ad, include_description=True)
+        self.assertEqual(len(matched_ids), 1)
 
         # Test with a description that contains only SQL in lowercase
-        ad.get_description.return_value = "sql developer"
+        ad.get_title = MagicMock(return_value="Database Developer")
+        ad.get_description = MagicMock(return_value="sql developer")
         ad.source = "<html><body>sql developer</body></html>"
 
-        matched_ids = self.analyzer.match_keywords_for_ad(ad)
-        self.assertEqual(len(matched_ids), 0)  # SQL is case-sensitive
+        # SQL is case-sensitive, so shouldn't match with lowercase
+        matched_ids = self.analyzer.match_keywords_for_ad(ad, include_description=True)
+        self.assertEqual(len(matched_ids), 0)
 
     def test_update_advertisement_keywords(self) -> None:
         """Test updating advertisement keywords associations."""
@@ -532,14 +566,14 @@ class TestAdvertAnalyzer(unittest.TestCase):
         count = self.analyzer.run_analysis(batch_size=50)
         self.assertEqual(count, 3)
 
-        # Verify process_advertisements was called with right parameters
-        mock_process.assert_called_with(min_id=None, max_id=None, batch_size=50)
+        # Verify process_advertisements was called with right parameters including include_description=False
+        mock_process.assert_called_with(min_id=None, max_id=None, batch_size=50, include_description=False)
 
         # Test with custom parameters
         mock_process.reset_mock()
         count = self.analyzer.run_analysis(min_id=10, max_id=20, batch_size=200)
 
-        mock_process.assert_called_with(min_id=10, max_id=20, batch_size=200)
+        mock_process.assert_called_with(min_id=10, max_id=20, batch_size=200, include_description=False)
 
         # Test with reset_tables=False
         mock_process.reset_mock()
@@ -551,6 +585,12 @@ class TestAdvertAnalyzer(unittest.TestCase):
 
                 mock_reset.assert_not_called()
                 mock_load.assert_not_called()
+                
+        # Test with include_description=True
+        mock_process.reset_mock()
+        count = self.analyzer.run_analysis(include_description=True)
+        
+        mock_process.assert_called_with(min_id=None, max_id=None, batch_size=100, include_description=True)
 
 
 if __name__ == "__main__":

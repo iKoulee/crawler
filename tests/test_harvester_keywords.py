@@ -131,14 +131,18 @@ class TestKeywordFunctionality(unittest.TestCase):
         """Characterize the _compile_keyword method behavior."""
         # Create a KeywordManager instance
         keyword_manager = KeywordManager()
-        
+
         # Test with case sensitive = True
-        pattern1 = keyword_manager._compile_keyword(search="Python", case_sensitive=True)
+        pattern1 = keyword_manager._compile_keyword(
+            search="Python", case_sensitive=True
+        )
         self.assertEqual(pattern1.pattern, "Python")
         self.assertFalse(pattern1.flags & re.IGNORECASE)
 
         # Test with case sensitive = False
-        pattern2 = keyword_manager._compile_keyword(search="Python", case_sensitive=False)
+        pattern2 = keyword_manager._compile_keyword(
+            search="Python", case_sensitive=False
+        )
         self.assertEqual(pattern2.pattern, "Python")
         self.assertTrue(pattern2.flags & re.IGNORECASE)
 
@@ -352,6 +356,235 @@ class TestKeywordFunctionality(unittest.TestCase):
         # All patterns should match something in our test HTML
         self.assertEqual(len(matched_patterns), len(patterns))
         self.assertEqual(set(matched_patterns), set(range(1, len(patterns) + 1)))
+
+    def test_title_only_matching(self) -> None:
+        """Test that the title_only parameter properly controls which content is matched against."""
+        # Create keyword manager for direct testing
+        keyword_manager = KeywordManager(logger)
+
+        # Test data setup
+        html_with_keyword_in_title_only = """
+        <html>
+        <body>
+        <h1>Senior Python Developer</h1>
+        <div class="description">
+        We are looking for a skilled developer with 3+ years of experience.
+        The ideal candidate will have experience with web frameworks like Django or Flask.
+        This position does not require javascript knowledge.
+        </div>
+        </body>
+        </html>
+        """
+
+        html_with_keyword_in_description_only = """
+        <html>
+        <body>
+        <h1>Software Developer Position</h1>
+        <div class="description">
+        We are looking for a skilled Python Developer with 3+ years of experience.
+        The ideal candidate will have experience with web frameworks like Django or Flask.
+        </div>
+        </body>
+        </html>
+        """
+
+        # Define test keyword that appears in different places in our test data
+        python_keyword = {
+            "title": "Python Developer",
+            "search": r"python\s+developer",
+            "case_sensitive": False,
+        }
+
+        # Insert keyword into the database
+        self.connection.execute("DELETE FROM keywords")  # Clear existing keywords
+        Harvester.insert_keyword(self.connection, python_keyword)
+
+        # Fetch compiled regex
+        regexes = Harvester.fetch_keywords(self.connection)
+        self.assertEqual(len(regexes), 1, "Should have exactly one keyword")
+
+        # Create test advertisements
+        title_ad = Advertisement(source=html_with_keyword_in_title_only)
+        title_ad.get_title = lambda: "Senior Python Developer"
+        title_ad.get_description = (
+            lambda: "We are looking for a skilled developer with experience."
+        )
+
+        description_ad = Advertisement(source=html_with_keyword_in_description_only)
+        description_ad.get_title = lambda: "Software Developer Position"
+        description_ad.get_description = (
+            lambda: "We are looking for a skilled Python Developer with experience."
+        )
+
+        # Test 1: Using title_only=True
+        # Should match when the keyword is in the title, but not when it's only in description
+        title_only_matches_title = keyword_manager.match_keywords(
+            title_ad, regexes, title_only=True
+        )
+        self.assertEqual(
+            len(title_only_matches_title),
+            1,
+            "Should match keyword in title when title_only=True",
+        )
+
+        title_only_matches_description = keyword_manager.match_keywords(
+            description_ad, regexes, title_only=True
+        )
+        self.assertEqual(
+            len(title_only_matches_description),
+            0,
+            "Should not match keyword in description when title_only=True",
+        )
+
+        # Test 2: Using title_only=False
+        # Should match when the keyword is in the title or in the description
+        full_matches_title = keyword_manager.match_keywords(
+            title_ad, regexes, title_only=False
+        )
+        self.assertEqual(
+            len(full_matches_title),
+            1,
+            "Should match keyword in title when title_only=False",
+        )
+
+        full_matches_description = keyword_manager.match_keywords(
+            description_ad, regexes, title_only=False
+        )
+        self.assertEqual(
+            len(full_matches_description),
+            1,
+            "Should match keyword in description when title_only=False",
+        )
+
+        # Test 3: Default behavior of Harvester.match_keywords
+        # Should use title_only=False by default (matching both title and description)
+        harvester_matches_title = self.harvester.match_keywords(title_ad, regexes)
+        self.assertEqual(
+            len(harvester_matches_title), 1, "Harvester should match keyword in title"
+        )
+
+        harvester_matches_description = self.harvester.match_keywords(
+            description_ad, regexes
+        )
+        self.assertEqual(
+            len(harvester_matches_description),
+            1,
+            "Harvester should match keyword in description",
+        )
+
+    def test_title_only_with_missing_fields(self) -> None:
+        """Test title_only parameter with advertisements that have missing title or description."""
+        # Create keyword manager for direct testing
+        keyword_manager = KeywordManager(logger)
+
+        # Create test keyword
+        python_keyword = {
+            "title": "Python Developer",
+            "search": r"python\s+developer",
+            "case_sensitive": False,
+        }
+
+        # Insert keyword into the database
+        self.connection.execute("DELETE FROM keywords")  # Clear existing keywords
+        Harvester.insert_keyword(self.connection, python_keyword)
+
+        # Fetch compiled regex
+        regexes = Harvester.fetch_keywords(self.connection)
+
+        # Test HTML content
+        html_with_python = """
+        <html><body>
+        <div>This is about a Python Developer position</div>
+        </body></html>
+        """
+
+        # Create test advertisements with missing fields
+        class NoTitleAd(Advertisement):
+            def get_title(self):
+                return None
+
+            def get_description(self):
+                return "This is about a Python Developer position"
+
+        class NoDescriptionAd(Advertisement):
+            def get_title(self):
+                return "Python Developer Position"
+
+            def get_description(self):
+                return None
+
+        class NoFieldsAd(Advertisement):
+            def get_title(self):
+                return None
+
+            def get_description(self):
+                return None
+
+        # Create instances
+        no_title_ad = NoTitleAd(source=html_with_python)
+        no_description_ad = NoDescriptionAd(source=html_with_python)
+        no_fields_ad = NoFieldsAd(source=html_with_python)
+
+        # Test with title_only=True
+        # Should not match when title is missing, even if description matches
+        matches_no_title = keyword_manager.match_keywords(
+            no_title_ad, regexes, title_only=True
+        )
+        self.assertEqual(
+            len(matches_no_title),
+            0,
+            "Should not match when title is None and title_only=True",
+        )
+
+        # Should match when title is present and matches
+        matches_no_desc = keyword_manager.match_keywords(
+            no_description_ad, regexes, title_only=True
+        )
+        self.assertEqual(
+            len(matches_no_desc),
+            1,
+            "Should match on title when description is None and title_only=True",
+        )
+
+        # Test with title_only=False
+        # Should match on description when title is missing
+        matches_no_title_full = keyword_manager.match_keywords(
+            no_title_ad, regexes, title_only=False
+        )
+        self.assertEqual(
+            len(matches_no_title_full),
+            1,
+            "Should match on description when title is None and title_only=False",
+        )
+
+        # Should match on title when description is missing
+        matches_no_desc_full = keyword_manager.match_keywords(
+            no_description_ad, regexes, title_only=False
+        )
+        self.assertEqual(
+            len(matches_no_desc_full),
+            1,
+            "Should match on title when description is None and title_only=False",
+        )
+
+        # Test with all fields missing - should fall back to raw HTML source
+        matches_no_fields_strict = keyword_manager.match_keywords(
+            no_fields_ad, regexes, title_only=True
+        )
+        self.assertEqual(
+            len(matches_no_fields_strict),
+            0,
+            "Should not match raw source when title_only=True and both fields are None",
+        )
+
+        matches_no_fields_full = keyword_manager.match_keywords(
+            no_fields_ad, regexes, title_only=False
+        )
+        self.assertEqual(
+            len(matches_no_fields_full),
+            1,
+            "Should match on raw source when both fields are None and title_only=False",
+        )
 
 
 if __name__ == "__main__":

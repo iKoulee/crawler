@@ -147,12 +147,15 @@ class AdvertAnalyzer:
         self.logger.debug("Compiled %d keyword patterns", len(self.compiled_keywords))
         return self.compiled_keywords
 
-    def match_keywords_for_ad(self, ad: Advertisement) -> List[int]:
+    def match_keywords_for_ad(
+        self, ad: Advertisement, include_description: bool = False
+    ) -> List[int]:
         """
         Match an advertisement against keywords and return matching keyword IDs.
 
         Args:
             ad: Advertisement instance to check
+            include_description: Whether to include the description in keyword matching (default: False)
 
         Returns:
             List of keyword IDs that match the advertisement
@@ -162,7 +165,12 @@ class AdvertAnalyzer:
             self._compile_keyword_patterns()
 
         # Delegate keyword matching to KeywordManager
-        return self.keyword_manager.match_keywords(ad, self.compiled_keywords)
+        # title_only is the opposite of include_description
+        # When include_description is False, we only match against the title (title_only=True)
+        # When include_description is True, we match against both title and description (title_only=False)
+        return self.keyword_manager.match_keywords(
+            ad, self.compiled_keywords, title_only=not include_description
+        )
 
     def update_advertisement_keywords(self, ad_id: int, keyword_ids: List[int]) -> None:
         """
@@ -207,6 +215,7 @@ class AdvertAnalyzer:
         min_id: Optional[int] = None,
         max_id: Optional[int] = None,
         batch_size: int = 100,
+        include_description: bool = False,
     ) -> int:
         """
         Process advertisements to match them with keywords.
@@ -215,6 +224,7 @@ class AdvertAnalyzer:
             min_id: Minimum advertisement ID to process (inclusive)
             max_id: Maximum advertisement ID to process (inclusive)
             batch_size: Number of advertisements to process in each batch
+            include_description: Whether to include description text in keyword matching (default: False)
 
         Returns:
             Number of advertisements processed
@@ -269,8 +279,10 @@ class AdvertAnalyzer:
         try:
             # Process each advertisement
             for ad in ads_iterator:
-                # Match keywords for this advertisement
-                matched_keyword_ids = self.match_keywords_for_ad(ad)
+                # Match keywords for this advertisement, passing the include_description parameter
+                matched_keyword_ids = self.match_keywords_for_ad(
+                    ad, include_description
+                )
 
                 # Update keyword matches in the database
                 self.update_advertisement_keywords(ad.id, matched_keyword_ids)
@@ -297,6 +309,7 @@ class AdvertAnalyzer:
         max_id: Optional[int] = None,
         batch_size: int = 100,
         reset_tables: bool = True,
+        include_description: bool = False,
     ) -> int:
         """
         Run the complete analysis process on advertisements.
@@ -311,12 +324,19 @@ class AdvertAnalyzer:
             max_id: Maximum advertisement ID to analyze (None for no upper bound)
             batch_size: Number of advertisements to process in each batch
             reset_tables: Whether to reset the keyword tables before analysis
+            include_description: Whether to include job description in keyword matching (default: False)
 
         Returns:
             Number of advertisements processed
         """
         try:
             self.logger.info("Starting advertisement analysis")
+
+            # Log matching strategy
+            if include_description:
+                self.logger.info("Using title and description for keyword matching")
+            else:
+                self.logger.info("Using title-only for keyword matching")
 
             # Reset keyword tables if requested
             if reset_tables:
@@ -336,7 +356,10 @@ class AdvertAnalyzer:
 
             # Process advertisements with the specified parameters
             ad_count = self.process_advertisements(
-                min_id=min_id, max_id=max_id, batch_size=batch_size
+                min_id=min_id,
+                max_id=max_id,
+                batch_size=batch_size,
+                include_description=include_description,
             )
 
             self.logger.info(
