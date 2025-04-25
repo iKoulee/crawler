@@ -9,6 +9,7 @@ import os
 from urllib.parse import urlparse
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import xml.dom.minidom as minidom
 
 from advert import AdFactory
 
@@ -653,3 +654,193 @@ class AdvertExporter:
                     )
 
         return compiled_filters
+
+    def export_to_xml(
+        self,
+        connection: sqlite3.Connection,
+        output_dir: str,
+        config_path: str,
+        min_id: Optional[int] = None,
+        max_id: Optional[int] = None,
+        batch_size: int = 100,
+    ) -> Tuple[int, Dict[str, int]]:
+        """
+        Export advertisements to individual XML files with nested directory structure.
+
+        Each advertisement is saved as a separate XML file using the same directory
+        structure as export_html_bodies. The XML format uses a <text> element for
+        each advertisement with attributes for metadata and the description as content.
+
+        Args:
+            connection: SQLite database connection
+            output_dir: Base directory for exported XML files
+            config_path: Path to the configuration file with filter definitions
+            min_id: Minimum advertisement ID to export (inclusive)
+            max_id: Maximum advertisement ID to export (inclusive)
+            batch_size: Number of advertisements to process in each batch
+
+        Returns:
+            Tuple containing (total_exported, category_counts)
+            where category_counts is a dictionary of category:count pairs
+        """
+        self.logger.info("Starting XML export process")
+
+        # Load filter configuration
+        filters = self._load_filter_configuration(config_path)
+        if not filters:
+            self.logger.error(
+                "No valid filters found in configuration. Aborting export."
+            )
+            return (0, {})
+
+        # Compile regular expressions for each filter
+        compiled_filters = self._compile_filters(filters)
+        self.logger.debug(
+            "Compiled %d filter categories with %d total filters",
+            len(compiled_filters),
+            sum(
+                len(category_filters) for category_filters in compiled_filters.values()
+            ),
+        )
+
+        # Ensure output directory exists
+        base_path = Path(output_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        # Retrieve advertisements from database
+        cursor = connection.cursor()
+        query = """
+            SELECT a.id, a.title, a.company, a.location, a.description, a.url, 
+                   a.created_at, a.ad_type, a.html_body 
+            FROM advertisements a
+            WHERE EXISTS (SELECT 1 FROM keyword_advertisement ka WHERE ka.advertisement_id = a.id)
+        """
+
+        params = []
+        if min_id is not None:
+            query += " AND a.id >= ?"
+            params.append(min_id)
+        if max_id is not None:
+            query += " AND a.id <= ?"
+            params.append(max_id)
+
+        query += " ORDER BY a.id ASC"
+
+        cursor.execute(query, params)
+
+        # Process results and export files
+        total_exported = 0
+        category_counts = {category: 0 for category in compiled_filters.keys()}
+
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+
+            for row in rows:
+                (
+                    ad_id,
+                    title,
+                    company,
+                    location,
+                    description,
+                    url,
+                    created_at,
+                    ad_type,
+                    html_body,
+                ) = row
+
+                # If description is missing, try to extract it using AdFactory
+                if not description:
+                    try:
+                        ad = AdFactory.create(ad_type, html_body, url)
+                        description = ad.get_description() or ""
+                    except Exception as e:
+                        self.logger.warning(
+                            "Error extracting description for advertisement ID %d: %s",
+                            ad_id,
+                            str(e),
+                        )
+                        description = ""
+
+                # Determine portal name from ad_type or URL
+                portal_name = self._extract_portal_name(ad_type, url)
+
+                # Create the file path based on filter matches
+                rel_path_parts = self._determine_path_from_filters(
+                    html_body, compiled_filters, category_counts
+                )
+
+                # Skip if no filters matched at all
+                if not rel_path_parts:
+                    self.logger.warning(
+                        "Advertisement ID %d did not match any filters and will not be exported",
+                        ad_id,
+                    )
+                    continue
+
+                # Format file name: portal_00001.xml
+                file_name = f"{portal_name}_{ad_id:05d}.xml"
+
+                # Build full path
+                full_path = base_path.joinpath(*rel_path_parts, file_name)
+
+                # Ensure directory exists
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    # Create XML document
+
+                    text_element = ET.Element("text")
+
+                    # Add attributes
+                    text_element.set("ID", str(ad_id))
+                    text_element.set("position", title or "")
+                    text_element.set("company", company or "")
+                    text_element.set("location", location or "")
+                    text_element.set("URL", url or "")
+                    text_element.set("accessed", created_at or "")
+
+                    # Add description as content
+                    text_element.text = description
+
+                    # Use minidom to format the XML with proper indentation
+                    xml_string = ET.tostring(text_element, encoding="utf-8")
+                    pretty_xml = minidom.parseString(xml_string).toprettyxml(
+                        indent="  ", encoding="utf-8"
+                    )
+
+                    # Write XML to file
+                    with open(full_path, "wb") as f:
+                        f.write(pretty_xml)
+
+                    # Update the XML filename in the database (optional)
+                    rel_file_path = str(full_path.relative_to(base_path))
+                    cursor_inner = connection.cursor()
+                    cursor_inner.execute(
+                        "UPDATE advertisements SET filename = ? WHERE id = ?",
+                        (rel_file_path, ad_id),
+                    )
+
+                    total_exported += 1
+                    if total_exported % 100 == 0:
+                        self.logger.info("Exported %d XML files", total_exported)
+                        connection.commit()  # Commit periodically
+
+                except IOError as e:
+                    self.logger.error("Failed to write XML file %s: %s", full_path, e)
+                except Exception as e:
+                    self.logger.error(
+                        "Error processing advertisement ID %d: %s", ad_id, e
+                    )
+
+        # Final commit
+        connection.commit()
+
+        self.logger.info(
+            "XML export completed. Exported %d advertisement files to %s",
+            total_exported,
+            base_path,
+        )
+
+        return (total_exported, category_counts)

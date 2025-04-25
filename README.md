@@ -14,6 +14,7 @@ This project automates the process of collecting job advertisements from support
 - **Flexible Export Options**:
   - CSV export for tabular data analysis
   - Structured HTML file export with customizable nested directory organization
+  - XML export for integration with other systems and data processing
 - **Content Filtering**: Filter and categorize advertisements by content using regular expression patterns
 - **Persistent Storage**: SQLite database for storing and querying all harvested advertisements
 - **Cross-platform Compatibility**: Works on Windows, macOS, and Linux
@@ -213,21 +214,34 @@ Options:
 - `--min-id`: Minimum advertisement ID to include
 - `--max-id`: Maximum advertisement ID to include
 
-### 3. Exporting HTML Files
+### 3. Exporting Advertisements
 
-Export the HTML content of advertisements into a structured directory hierarchy:
+Export the content of advertisements into a structured directory hierarchy in either HTML or XML format:
 
 ```bash
-python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --min-id 1 --max-id 1000 --create-csv-files
+# HTML export (default)
+python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --format HTML --min-id 1 --max-id 1000 --create-csv-files
+
+# XML export
+python src/crawler.py export -d crawler.db -c etc/config.yml -o output_dir --format XML --min-id 1 --max-id 1000
 ```
 
 Options:
 - `-d, --database`: Path to the database file
 - `-c, --config`: Path to the filter configuration file
-- `-o, --output-dir`: Output directory for exported HTML files
+- `-o, --output-dir`: Output directory for exported files
+- `--format`: Export format, either HTML (default) or XML
 - `--min-id`: Minimum advertisement ID to include
 - `--max-id`: Maximum advertisement ID to include
-- `--create-csv-files`: Generate CSV summaries in each directory
+- `--create-csv-files`: Generate CSV summaries in each directory (only applicable for HTML format)
+- `-b, --batch-size`: Number of advertisements to process in each batch (default: 100)
+
+The XML format exports each advertisement as:
+```xml
+<text ID="advertisement_id" position="job_title" company="company_name" location="location" URL="url" accessed="created_at">
+  Advertisement description text
+</text>
+```
 
 ### 4. Analyzing Advertisements
 

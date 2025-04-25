@@ -188,7 +188,7 @@ def assembly_command(args: argparse.Namespace, logger: logging.Logger) -> None:
 
 def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
     """
-    Execute the export command to export HTML bodies to files with nested directory structure.
+    Execute the export command to export advertisements to files with nested directory structure.
 
     Args:
         args: Command line arguments
@@ -205,15 +205,27 @@ def export_command(args: argparse.Namespace, logger: logging.Logger) -> None:
         # Create an AdvertExporter instance
         exporter = AdvertExporter(logger)
 
-        # Export HTML bodies
-        total_exported, category_counts = exporter.export_html_bodies(
-            connection,
-            args.output_dir,
-            args.config,
-            min_id=args.min_id,
-            max_id=args.max_id,
-            create_csv_files=args.create_csv_files,
-        )
+        # Export advertisements based on the specified format
+        if args.format.upper() == "XML":
+            logger.info("Exporting advertisements in XML format")
+            total_exported, category_counts = exporter.export_to_xml(
+                connection,
+                args.output_dir,
+                args.config,
+                min_id=args.min_id,
+                max_id=args.max_id,
+                batch_size=args.batch_size,
+            )
+        else:  # Default to HTML
+            logger.info("Exporting advertisements in HTML format")
+            total_exported, category_counts = exporter.export_html_bodies(
+                connection,
+                args.output_dir,
+                args.config,
+                min_id=args.min_id,
+                max_id=args.max_id,
+                create_csv_files=args.create_csv_files,
+            )
 
         logger.info("Exported %d advertisements", total_exported)
         for category, count in category_counts.items():
@@ -734,6 +746,22 @@ def main() -> None:
         "--create-csv-files",
         action="store_true",
         help="Create CSV files for exported advertisements",
+    )
+    export_parser.add_argument(
+        "--format",
+        required=False,
+        type=str,
+        default="HTML",
+        choices=["HTML", "XML"],
+        help="Format for exported advertisements (HTML or XML)",
+    )
+    export_parser.add_argument(
+        "-b",
+        "--batch-size",
+        required=False,
+        type=int,
+        default=100,
+        help="Number of advertisements to process in each batch",
     )
 
     # Create the parser for the "analyze" command
